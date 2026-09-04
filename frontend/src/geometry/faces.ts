@@ -110,7 +110,7 @@ export function extractFacesFromLines(lines: DrawingLine[]): Face3D[] {
 
               facesList.push({
                 id: `face-tri-${triKeys}`,
-                normal: { x: Math.round(nx), y: Math.round(nz), z: Math.round(ny) },
+                normal: { x: Number(nx.toFixed(4)), y: Number(nz.toFixed(4)), z: Number(ny.toFixed(4)) },
                 center: {
                   x: Math.round((p0.x + p1.x + p2.x) / 3),
                   y: Math.round((p0.y + p1.y + p2.y) / 3),
@@ -174,7 +174,7 @@ export function extractFacesFromLines(lines: DrawingLine[]): Face3D[] {
 
                   facesList.push({
                     id: `face-${quadKeys}`,
-                    normal: { x: Math.round(nx), y: Math.round(nz), z: Math.round(ny) },
+                    normal: { x: Number(nx.toFixed(4)), y: Number(nz.toFixed(4)), z: Number(ny.toFixed(4)) },
                     center: {
                       x: Math.round((p0.x + p1.x + p2.x + p3.x) / 4),
                       y: Math.round((p0.y + p1.y + p2.y + p3.y) / 4),

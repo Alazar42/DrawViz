@@ -12,7 +12,7 @@ import { IsometricCanvas } from './canvas/IsometricCanvas';
 import { Three3DCanvas } from './canvas/Three3DCanvas';
 import { AxisIndicator } from './canvas/AxisIndicator';
 import { OrientationGizmo } from './canvas/OrientationGizmo';
-import { DrawVizProject } from './types/drawing';
+import { DrawVizProject, DrawingCylinder } from './types/drawing';
 
 export const App: React.FC = () => {
   const state = useDrawingState();
@@ -63,7 +63,15 @@ export const App: React.FC = () => {
           state.setActiveTool('circle');
           setStatusMessage('Tool: Circle / Isocircle');
           break;
-        case 'e':
+        case 'a':
+          state.setActiveTool('arc');
+          setStatusMessage('Tool: Half Arc (180°) / Arc');
+          break;
+        case 'y':
+          state.setActiveTool('cylinder');
+          setStatusMessage('Tool: 3D Cylinder');
+          break;
+        case 'x':
           state.setActiveTool('eraser');
           setStatusMessage('Tool: Eraser');
           break;
@@ -116,6 +124,7 @@ export const App: React.FC = () => {
       layers: state.layers,
       lines: state.lines,
       arcs: state.arcs,
+      cylinders: state.cylinders,
       activeLessonId: state.activeLessonId,
     };
 
@@ -151,9 +160,10 @@ export const App: React.FC = () => {
         const filePath = await wailsGo.OpenFileDialog();
         if (filePath) {
           const project: DrawVizProject = await wailsGo.LoadProject(filePath);
-          if (project && (project.lines || project.arcs)) {
+          if (project && (project.lines || project.arcs || project.cylinders)) {
             state.setLinesState(project.lines || []);
             state.setArcs(project.arcs || []);
+            state.setCylinders(project.cylinders || []);
             if (project.layers) state.layers.splice(0, state.layers.length, ...project.layers);
             if (project.gridSettings) state.setGridSettings(project.gridSettings);
             setStatusMessage(`Loaded ${filePath}`);
@@ -290,9 +300,11 @@ export const App: React.FC = () => {
             <Three3DCanvas
               lines={state.lines}
               arcs={state.arcs}
+              cylinders={state.cylinders}
               activeLayerId={state.activeLayerId}
               selectedLineId={state.selectedLineId}
               selectedArcId={state.selectedArcId}
+              selectedCylinderId={state.selectedCylinderId}
               activeTool={state.activeTool}
               gridSettings={state.gridSettings}
               activeAnchor={state.activeAnchor}
@@ -311,12 +323,13 @@ export const App: React.FC = () => {
               }}
               onSelectFace={(f) => {
                 state.setSelectedFace(f);
-                if (f) setStatusMessage(`Selected ${f.plane.toUpperCase()} Face at Elev ${f.elevation}`);
+                if (f) setStatusMessage(`Selected Face at Elev ${f.elevation}`);
               }}
               onSelectLine={(id) => {
                 state.setSelectedLineId(id);
                 if (id) {
                   state.setSelectedArcId(null);
+                  state.setSelectedCylinderId(null);
                   setStatusMessage(`Selected Line ${id}`);
                 }
               }}
@@ -324,7 +337,16 @@ export const App: React.FC = () => {
                 state.setSelectedArcId(id);
                 if (id) {
                   state.setSelectedLineId(null);
+                  state.setSelectedCylinderId(null);
                   setStatusMessage(`Selected Circle ${id}`);
+                }
+              }}
+              onSelectCylinder={(id) => {
+                state.setSelectedCylinderId(id);
+                if (id) {
+                  state.setSelectedLineId(null);
+                  state.setSelectedArcId(null);
+                  setStatusMessage(`Selected Cylinder ${id}`);
                 }
               }}
               onAddLine={(line) => {
@@ -333,8 +355,15 @@ export const App: React.FC = () => {
               }}
               onAddArc={(arc) => {
                 state.addArc(arc);
-                setStatusMessage(`3D Circle created [${arc.plane.toUpperCase()}] R: ${arc.radius}`);
+                const isHalf = (arc.endAngle ?? 360) - (arc.startAngle ?? 0) <= 180;
+                setStatusMessage(`3D ${isHalf ? 'Half Arc (180°)' : 'Circle'} created R: ${arc.radius}`);
               }}
+              onAddCylinder={(cyl) => {
+                state.addCylinder(cyl);
+                setStatusMessage(`3D Cylinder created R: ${cyl.radius} H: ${cyl.height}`);
+              }}
+              onUpdateArc={state.updateArc}
+              onUpdateCylinder={state.updateCylinder}
               onRemoveLine={(id) => {
                 state.removeLine(id);
                 setStatusMessage('Line removed');
@@ -342,6 +371,10 @@ export const App: React.FC = () => {
               onRemoveArc={(id) => {
                 state.removeArc(id);
                 setStatusMessage('Circle removed');
+              }}
+              onRemoveCylinder={(id) => {
+                state.removeCylinder(id);
+                setStatusMessage('Cylinder removed');
               }}
               onSetAnchor={state.setActiveAnchor}
               onSetElevation={(elev) => {
@@ -359,12 +392,14 @@ export const App: React.FC = () => {
           <OrthoPanel
             lines={state.lines}
             arcs={state.arcs}
+            cylinders={state.cylinders}
             isOpen={state.showOrthoPanel}
             onToggle={() => state.setShowOrthoPanel(!state.showOrthoPanel)}
-            selectedLineId={state.selectedLineId || state.selectedArcId}
+            selectedLineId={state.selectedLineId || state.selectedArcId || state.selectedCylinderId}
             onSelectLine={(id) => {
               state.setSelectedLineId(id);
               state.setSelectedArcId(id);
+              state.setSelectedCylinderId(id);
               if (id) {
                 setStatusMessage(`Selected entity from camera projection`);
               }
@@ -391,10 +426,12 @@ export const App: React.FC = () => {
           <PropertyPanel
             selectedLine={state.selectedLine}
             selectedArc={state.selectedArc}
+            selectedCylinder={state.cylinders.find((c) => c.id === state.selectedCylinderId) || null}
             selectedVertex={state.selectedVertex}
             selectedFace={state.selectedFace}
             totalLines={state.lines.length}
             totalArcs={state.arcs.length}
+            totalCylinders={state.cylinders.length}
             layers={state.layers}
             unitSize={state.gridSettings.unitSize}
             zoom={state.viewport.zoom}
@@ -405,7 +442,33 @@ export const App: React.FC = () => {
             }}
             onDeleteArc={(id) => {
               state.removeArc(id);
-              setStatusMessage('Deleted isocircle');
+              setStatusMessage('Deleted circle');
+            }}
+            onDeleteCylinder={(id) => {
+              state.removeCylinder(id);
+              setStatusMessage('Deleted cylinder');
+            }}
+            onExtrudeArc={(arc) => {
+              const norm =
+                arc.normal ??
+                (arc.plane === 'top'
+                  ? { x: 0, y: 0, z: 1 }
+                  : arc.plane === 'front'
+                  ? { x: 0, y: 1, z: 0 }
+                  : { x: 1, y: 0, z: 0 });
+              const newCyl: DrawingCylinder = {
+                id: `cylinder-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                center: { ...arc.center },
+                radius: arc.radius,
+                height: 6,
+                normal: norm,
+                layerId: state.activeLayerId,
+                style: { stroke: '#111827', strokeWidth: 1.75, lineType: 'solid' },
+              };
+              state.addCylinder(newCyl);
+              state.setSelectedArcId(null);
+              state.setSelectedCylinderId(newCyl.id);
+              setStatusMessage('Extruded circle to 3D cylinder');
             }}
             onUpdateLineStyle={(id, style) => {
               state.setLines((prev) =>

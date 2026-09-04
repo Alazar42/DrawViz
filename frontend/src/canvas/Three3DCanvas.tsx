@@ -4,17 +4,26 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   DrawingLine,
   DrawingArc,
+  DrawingCylinder,
   Point3D,
   ScreenPoint,
   ToolType,
   GridSettings,
   SelectionMode,
   Face3D,
+  AlignmentMode,
 } from '../types/drawing';
 import { IsoplaneType } from '../geometry/isometric';
 import { CursorState } from '../state/drawingState';
 import { cursorStore } from '../state/cursorStore';
 import { extractFacesFromLines } from '../geometry/faces';
+import {
+  getArcPoints,
+  getCylinderGeometryData,
+  logicalToThreeNormal,
+  threeToLogicalNormal,
+  calculateFaceNormalThree,
+} from '../geometry/circle3d';
 import {
   Layers,
   RotateCcw,
@@ -25,14 +34,20 @@ import {
   Magnet,
   Maximize2,
   Box,
+  ChevronDown,
+  ChevronUp,
+  Check,
+  RefreshCw,
 } from 'lucide-react';
 
 interface Three3DCanvasProps {
   lines: DrawingLine[];
   arcs?: DrawingArc[];
+  cylinders?: DrawingCylinder[];
   activeLayerId: string;
   selectedLineId: string | null;
   selectedArcId?: string | null;
+  selectedCylinderId?: string | null;
   selectedVertex?: Point3D | null;
   selectedFace?: Face3D | null;
   selectionMode?: SelectionMode;
@@ -43,13 +58,18 @@ interface Three3DCanvasProps {
   activeIsoplane?: IsoplaneType;
   onSelectLine: (id: string | null) => void;
   onSelectArc?: (id: string | null) => void;
+  onSelectCylinder?: (id: string | null) => void;
   onSelectVertex?: (pt: Point3D | null) => void;
   onSelectFace?: (face: Face3D | null) => void;
   onSetSelectionMode?: (mode: SelectionMode) => void;
   onAddLine: (line: DrawingLine) => void;
   onAddArc?: (arc: DrawingArc) => void;
+  onAddCylinder?: (cylinder: DrawingCylinder) => void;
+  onUpdateArc?: (arc: DrawingArc) => void;
+  onUpdateCylinder?: (cylinder: DrawingCylinder) => void;
   onRemoveLine: (id: string) => void;
   onRemoveArc?: (id: string) => void;
+  onRemoveCylinder?: (id: string) => void;
   onSetAnchor: (anchor: Point3D | null) => void;
   onCursorUpdate?: (state: CursorState) => void;
   onSetElevation?: (elevation: number) => void;
@@ -87,9 +107,11 @@ export type CameraPreset = 'iso' | 'top' | 'bottom' | 'front' | 'back' | 'right'
 export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   lines,
   arcs = [],
+  cylinders = [],
   activeLayerId,
   selectedLineId,
   selectedArcId = null,
+  selectedCylinderId = null,
   selectedVertex = null,
   selectedFace = null,
   selectionMode = 'edge',
@@ -100,13 +122,18 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   activeIsoplane = 'top',
   onSelectLine,
   onSelectArc,
+  onSelectCylinder,
   onSelectVertex,
   onSelectFace,
   onSetSelectionMode,
   onAddLine,
   onAddArc,
+  onAddCylinder,
+  onUpdateArc,
+  onUpdateCylinder,
   onRemoveLine,
   onRemoveArc,
+  onRemoveCylinder,
   onSetAnchor,
   onCursorUpdate,
   onSetElevation,
@@ -165,6 +192,9 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   const activeAnchorRef = useRef<Point3D | null>(activeAnchor);
   activeAnchorRef.current = activeAnchor;
 
+  const activeElevationRef = useRef<number>(activeElevation);
+  activeElevationRef.current = activeElevation;
+
   const pointerDownPosRef = useRef<{ x: number; y: number; button: number } | null>(null);
 
   const currentSnapRef = useRef<{
@@ -174,6 +204,77 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     lineId?: string | null;
     faceData?: Face3D | null;
   } | null>(null);
+
+  // Normal alignment for circles, half arcs, and cylinders on inclined planes
+  const activeNormalRef = useRef<Point3D>({ x: 0, y: 0, z: 1 });
+  // Multi-step cylinder drafting: 0 = idle, 1 = radius, 2 = height
+  const cylinderDraftRef = useRef<{
+    step: 0 | 1 | 2;
+    center: Point3D | null;
+    radius: number;
+    normal: Point3D;
+  }>({
+    step: 0,
+    center: null,
+    radius: 5,
+    normal: { x: 0, y: 0, z: 1 },
+  });
+
+  // Blender-style Orientation & Operator Control (Full User Control)
+  const [alignmentMode, setAlignmentMode] = useState<AlignmentMode>('world-z');
+  const [lastCreatedEntity, setLastCreatedEntity] = useState<{
+    type: 'circle' | 'arc' | 'cylinder';
+    id: string;
+    radius: number;
+    height?: number;
+    normal: Point3D;
+    alignmentMode: AlignmentMode;
+    center: Point3D;
+    startAngle?: number;
+    endAngle?: number;
+  } | null>(null);
+  const [isOperatorOpen, setIsOperatorOpen] = useState<boolean>(true);
+
+  // Blender-style Alignment Normal Resolver
+  const getDraftingNormal = useCallback(
+    (mode: AlignmentMode, snapPt?: Point3D, faceData?: Face3D | null): Point3D => {
+      if (mode === 'world-z') {
+        return { x: 0, y: 0, z: 1 };
+      }
+      if (mode === 'world-y') {
+        return { x: 0, y: 1, z: 0 };
+      }
+      if (mode === 'world-x') {
+        return { x: 1, y: 0, z: 0 };
+      }
+      if (mode === 'view') {
+        const cam = activeCameraRef.current;
+        if (cam) {
+          const dir = new THREE.Vector3();
+          cam.getWorldDirection(dir);
+          return threeToLogicalNormal(dir.negate());
+        }
+        return { x: 0, y: 0, z: 1 };
+      }
+      if (mode === 'surface') {
+        if (faceData) {
+          return faceData.normal;
+        }
+        if (snapPt) {
+          const face = extractedFacesRef.current.find((f) =>
+            f.vertices.some(
+              (v) =>
+                Math.hypot(v.x - snapPt.x, v.y - snapPt.y, (v.z || 0) - (snapPt.z || 0)) < 0.2
+            )
+          );
+          if (face) return face.normal;
+        }
+        return { x: 0, y: 0, z: 1 };
+      }
+      return { x: 0, y: 0, z: 1 };
+    },
+    []
+  );
 
   // -------------------------------------------------------------
   // Zero-Overhead 2D Canvas Orientation Gizmo
@@ -491,12 +592,40 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         e.preventDefault();
         frameAll();
       } else if (e.key === 'Escape') {
+        cylinderDraftRef.current = { step: 0, center: null, radius: 5, normal: { x: 0, y: 0, z: 1 } };
         onSetAnchor(null);
         onSelectLine(null);
         onSelectArc?.(null);
+        onSelectCylinder?.(null);
         onSelectVertex?.(null);
         onSelectFace?.(null);
         requestRender();
+      } else if (
+        e.key === 'Delete' ||
+        e.key === 'Backspace' ||
+        (e.key.toLowerCase() === 'x' && !e.ctrlKey && !e.metaKey && !e.altKey)
+      ) {
+        if (selectedCylinderId) {
+          e.preventDefault();
+          onRemoveCylinder?.(selectedCylinderId);
+          onSelectCylinder?.(null);
+          requestRender();
+          return;
+        }
+        if (selectedArcId) {
+          e.preventDefault();
+          onRemoveArc?.(selectedArcId);
+          onSelectArc?.(null);
+          requestRender();
+          return;
+        }
+        if (selectedLineId) {
+          e.preventDefault();
+          onRemoveLine(selectedLineId);
+          onSelectLine(null);
+          requestRender();
+          return;
+        }
       }
     };
 
@@ -515,7 +644,25 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [onSetAnchor, onSelectLine, onSelectArc, onSelectVertex, onSelectFace, requestRender]);
+  }, [
+    onSetAnchor,
+    onSelectLine,
+    onSelectArc,
+    onSelectCylinder,
+    onSelectVertex,
+    onSelectFace,
+    onAddCylinder,
+    onRemoveLine,
+    onRemoveArc,
+    onRemoveCylinder,
+    selectedArcId,
+    selectedCylinderId,
+    selectedLineId,
+    arcs,
+    cylinders,
+    activeLayerId,
+    requestRender,
+  ]);
 
   // -------------------------------------------------------------
   // 3. Camera View Controls
@@ -601,7 +748,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     const controls = controlsRef.current;
     if (!camera || !controls) return;
 
-    if (lines.length === 0 && arcs.length === 0) {
+    if (lines.length === 0 && arcs.length === 0 && cylinders.length === 0) {
       controls.target.set(0, 0, 0);
       setCameraView('iso');
       return;
@@ -617,6 +764,11 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       box.expandByPoint(new THREE.Vector3(c.x + a.radius, c.y, c.z + a.radius));
       box.expandByPoint(new THREE.Vector3(c.x - a.radius, c.y, c.z - a.radius));
     });
+    cylinders.forEach((cyl) => {
+      const c = logicalToThree(cyl.center);
+      box.expandByPoint(new THREE.Vector3(c.x + cyl.radius, c.y + cyl.height, c.z + cyl.radius));
+      box.expandByPoint(new THREE.Vector3(c.x - cyl.radius, c.y, c.z - cyl.radius));
+    });
 
     const center = new THREE.Vector3();
     box.getCenter(center);
@@ -631,7 +783,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     camera.lookAt(center);
     controls.update();
     requestRender();
-  }, [lines, arcs, setCameraView, requestRender]);
+  }, [lines, arcs, cylinders, setCameraView, requestRender]);
 
   // -------------------------------------------------------------
   // 4. Render 3D Grid Plane
@@ -739,40 +891,20 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     arcs.forEach((arc) => {
       const centerThree = logicalToThree(arc.center);
       const r = arc.radius;
-
-      const curvePoints: THREE.Vector3[] = [];
-      const segments = 48;
-      const startRad = ((arc.startAngle ?? 0) * Math.PI) / 180;
-      const endRad = ((arc.endAngle ?? 360) * Math.PI) / 180;
-
-      for (let i = 0; i <= segments; i++) {
-        const theta = startRad + (i / segments) * (endRad - startRad);
-        if (arc.plane === 'top') {
-          curvePoints.push(
-            new THREE.Vector3(
-              centerThree.x + r * Math.cos(theta),
-              centerThree.y,
-              centerThree.z + r * Math.sin(theta)
-            )
-          );
-        } else if (arc.plane === 'front') {
-          curvePoints.push(
-            new THREE.Vector3(
-              centerThree.x + r * Math.cos(theta),
-              centerThree.y + r * Math.sin(theta),
-              centerThree.z
-            )
-          );
-        } else {
-          curvePoints.push(
-            new THREE.Vector3(
-              centerThree.x,
-              centerThree.y + r * Math.sin(theta),
-              centerThree.z + r * Math.cos(theta)
-            )
-          );
-        }
+      let normalThree: THREE.Vector3;
+      if (arc.normal) {
+        normalThree = logicalToThreeNormal(arc.normal);
+      } else if (arc.plane === 'top') {
+        normalThree = new THREE.Vector3(0, 1, 0);
+      } else if (arc.plane === 'front') {
+        normalThree = new THREE.Vector3(0, 0, 1);
+      } else {
+        normalThree = new THREE.Vector3(1, 0, 0);
       }
+
+      const startDeg = arc.startAngle ?? 0;
+      const endDeg = arc.endAngle ?? 360;
+      const curvePoints = getArcPoints(centerThree, r, normalThree, startDeg, endDeg, 48);
 
       const curveGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
       const curveMat = new THREE.LineBasicMaterial({ color: 0x111827, linewidth: 2 });
@@ -785,9 +917,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       geoGroup.add(cMesh);
     });
 
-    const extracted = extractFacesFromLines(lines);
-    extractedFacesRef.current = extracted;
-
     const baseFaceMat = new THREE.MeshLambertMaterial({
       color: solidShading ? 0xffffff : 0xf8fafc,
       transparent: !solidShading,
@@ -797,6 +926,39 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       polygonOffsetFactor: 1,
       polygonOffsetUnits: 1,
     });
+
+    cylinders.forEach((cyl) => {
+      const centerThree = logicalToThree(cyl.center);
+      const normalThree = cyl.normal ? logicalToThreeNormal(cyl.normal) : new THREE.Vector3(0, 1, 0);
+      const { basePoints, topPoints, silhouetteLines, midPoint, quaternion } = getCylinderGeometryData(
+        centerThree,
+        cyl.radius,
+        cyl.height,
+        normalThree
+      );
+
+      // Base circle
+      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(basePoints), baseLineMat));
+      // Top circle
+      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(topPoints), baseLineMat));
+      // 4 Silhouette lines
+      silhouetteLines.forEach(([p1, p2]) => {
+        geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([p1, p2]), baseLineMat));
+      });
+
+      // Solid cylinder shading
+      if (solidShading) {
+        const cylGeo = new THREE.CylinderGeometry(cyl.radius, cyl.radius, Math.abs(cyl.height), 32, 1, false);
+        const cylMesh = new THREE.Mesh(cylGeo, baseFaceMat);
+        cylMesh.position.copy(midPoint);
+        cylMesh.quaternion.copy(quaternion);
+        (cylMesh as any).userData = { cylinderData: cyl };
+        faceGroup.add(cylMesh);
+      }
+    });
+
+    const extracted = extractFacesFromLines(lines);
+    extractedFacesRef.current = extracted;
 
     extracted.forEach((faceObj) => {
       const v = faceObj.vertices.map(logicalToThree);
@@ -828,7 +990,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     });
 
     requestRender();
-  }, [lines, arcs, selectionMode, solidShading, requestRender]);
+  }, [lines, arcs, cylinders, selectionMode, solidShading, requestRender]);
 
   // -------------------------------------------------------------
   // 6. Selection Highlights Layer
@@ -866,24 +1028,45 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       const arc = arcs.find((a) => a.id === selectedArcId);
       if (arc) {
         const centerThree = logicalToThree(arc.center);
-        const r = arc.radius;
-        const pts: THREE.Vector3[] = [];
-        const segs = 48;
-        const startRad = ((arc.startAngle ?? 0) * Math.PI) / 180;
-        const endRad = ((arc.endAngle ?? 360) * Math.PI) / 180;
-        for (let i = 0; i <= segs; i++) {
-          const theta = startRad + (i / segs) * (endRad - startRad);
-          if (arc.plane === 'top') {
-            pts.push(new THREE.Vector3(centerThree.x + r * Math.cos(theta), centerThree.y, centerThree.z + r * Math.sin(theta)));
-          } else if (arc.plane === 'front') {
-            pts.push(new THREE.Vector3(centerThree.x + r * Math.cos(theta), centerThree.y + r * Math.sin(theta), centerThree.z));
-          } else {
-            pts.push(new THREE.Vector3(centerThree.x, centerThree.y + r * Math.sin(theta), centerThree.z + r * Math.cos(theta)));
-          }
+        let normalThree: THREE.Vector3;
+        if (arc.normal) {
+          normalThree = logicalToThreeNormal(arc.normal);
+        } else if (arc.plane === 'top') {
+          normalThree = new THREE.Vector3(0, 1, 0);
+        } else if (arc.plane === 'front') {
+          normalThree = new THREE.Vector3(0, 0, 1);
+        } else {
+          normalThree = new THREE.Vector3(1, 0, 0);
         }
+        const startDeg = arc.startAngle ?? 0;
+        const endDeg = arc.endAngle ?? 360;
+        const pts = getArcPoints(centerThree, arc.radius, normalThree, startDeg, endDeg, 48);
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
         const mat = new THREE.LineBasicMaterial({ color: 0x4f46e5, linewidth: 3.5, depthTest: false });
         selGroup.add(new THREE.Line(geo, mat));
+
+        const haloMat = new THREE.LineBasicMaterial({ color: 0x818cf8, transparent: true, opacity: 0.65, linewidth: 7, depthTest: false });
+        selGroup.add(new THREE.Line(geo, haloMat));
+      }
+    }
+
+    if (selectedCylinderId) {
+      const cyl = cylinders.find((c) => c.id === selectedCylinderId);
+      if (cyl) {
+        const centerThree = logicalToThree(cyl.center);
+        const normalThree = cyl.normal ? logicalToThreeNormal(cyl.normal) : new THREE.Vector3(0, 1, 0);
+        const { basePoints, topPoints, silhouetteLines } = getCylinderGeometryData(
+          centerThree,
+          cyl.radius,
+          cyl.height,
+          normalThree
+        );
+        const mat = new THREE.LineBasicMaterial({ color: 0x4f46e5, linewidth: 3.5, depthTest: false });
+        selGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(basePoints), mat));
+        selGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(topPoints), mat));
+        silhouetteLines.forEach(([p1, p2]) => {
+          selGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([p1, p2]), mat));
+        });
       }
     }
 
@@ -931,7 +1114,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     }
 
     requestRender();
-  }, [selectedLineId, selectedArcId, selectedVertex, selectedFace, lines, arcs, requestRender]);
+  }, [selectedLineId, selectedArcId, selectedCylinderId, selectedVertex, selectedFace, lines, arcs, cylinders, requestRender]);
 
   // -------------------------------------------------------------
   // 7. Blender Snapping Calculations (Optimized: 0 Object Allocations!)
@@ -1105,6 +1288,60 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
 
       // 4. FACE RAYCAST SNAP
+      // 4. DRAFTING PLANE INTERSECTION (Primary 3D Sketching Surface in the Air)
+      let draftingPlanePt: Point3D | null = null;
+      let distToDraftingPlane = Infinity;
+
+      // If drafting circle, arc, or cylinder with an active center, project directly onto its surface plane
+      if (
+        (activeTool === 'circle' || activeTool === 'arc' || activeTool === 'cylinder') &&
+        (activeAnchorRef.current || cylinderDraftRef.current.step > 0)
+      ) {
+        const centerPt = activeAnchorRef.current || cylinderDraftRef.current.center;
+        if (centerPt) {
+          const centerThree = logicalToThree(centerPt);
+          const normThree = logicalToThreeNormal(activeNormalRef.current);
+          _draftingPlane.setFromNormalAndCoplanarPoint(normThree, centerThree);
+          _mouseVec.set(mouseX, mouseY);
+          _raycaster.setFromCamera(_mouseVec, camera);
+          if (_raycaster.ray.intersectPlane(_draftingPlane, _intersectPt)) {
+            distToDraftingPlane = _raycaster.ray.origin.distanceTo(_intersectPt);
+            draftingPlanePt = threeToLogical(_intersectPt);
+          }
+        }
+      }
+
+      if (!draftingPlanePt) {
+        let planeNormalX = 0, planeNormalY = 1, planeNormalZ = 0;
+        if (activeIsoplane === 'front') {
+          planeNormalY = 0; planeNormalZ = 1;
+        } else if (activeIsoplane === 'side') {
+          planeNormalY = 0; planeNormalX = 1;
+        }
+        _draftingPlane.normal.set(planeNormalX, planeNormalY, planeNormalZ);
+        _draftingPlane.constant = -activeElevation;
+
+        _mouseVec.set(mouseX, mouseY);
+        _raycaster.setFromCamera(_mouseVec, camera);
+        if (_raycaster.ray.intersectPlane(_draftingPlane, _intersectPt)) {
+          distToDraftingPlane = _raycaster.ray.origin.distanceTo(_intersectPt);
+          let logical = threeToLogical(_intersectPt);
+          if (snapModes.grid && gridSettings.snapToGrid) {
+            logical = {
+              x: Math.round(logical.x),
+              y: Math.round(logical.y),
+              z: activeIsoplane === 'top' ? activeElevation : Math.round(logical.z),
+            };
+          }
+          draftingPlanePt = logical;
+        }
+      }
+
+      // 5. FACE RAYCAST SNAP
+      // If user is selecting or erasing, allow selecting any face.
+      // If user is drafting (lines, shapes):
+      // - Do NOT drop through the air onto faces that are behind/below the active elevation plane!
+      // - Only snap if the face is in front of the drafting plane OR on the active elevation!
       if (snapModes.face) {
         _mouseVec.set(mouseX, mouseY);
         _raycaster.setFromCamera(_mouseVec, camera);
@@ -1113,40 +1350,30 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           const hits = _raycaster.intersectObjects(faceGroup.children, false);
           if (hits.length > 0) {
             const hit = hits[0];
-            const faceData = (hit.object as any).userData?.faceData as Face3D | undefined;
-            return {
-              logical: threeToLogical(hit.point),
-              screen: mouseScreen,
-              type: 'face' as const,
-              faceData,
-            };
+            const isSelectOrErase = activeTool === 'select' || activeTool === 'eraser';
+            const hitLogical = threeToLogical(hit.point);
+            const isFaceInFront = !draftingPlanePt || hit.distance < distToDraftingPlane - 0.05;
+            const isNearElevation = Math.abs((hitLogical.z || 0) - activeElevation) < 0.5;
+
+            if (isSelectOrErase || (isFaceInFront && (activeElevation === 0 || isNearElevation))) {
+              const faceData = (hit.object as any).userData?.faceData as Face3D | undefined;
+              const cylData = (hit.object as any).userData?.cylinderData as DrawingCylinder | undefined;
+              return {
+                logical: hitLogical,
+                screen: mouseScreen,
+                type: 'face' as const,
+                faceData,
+                cylinderData: cylData,
+              };
+            }
           }
         }
       }
 
-      // 5. DRAFTING PLANE INTERSECTION
-      let planeNormalX = 0, planeNormalY = 1, planeNormalZ = 0;
-      if (activeIsoplane === 'front') {
-        planeNormalY = 0; planeNormalZ = 1;
-      } else if (activeIsoplane === 'side') {
-        planeNormalY = 0; planeNormalX = 1;
-      }
-      _draftingPlane.normal.set(planeNormalX, planeNormalY, planeNormalZ);
-      _draftingPlane.constant = -activeElevation;
-
-      _mouseVec.set(mouseX, mouseY);
-      _raycaster.setFromCamera(_mouseVec, camera);
-      if (_raycaster.ray.intersectPlane(_draftingPlane, _intersectPt)) {
-        let logical = threeToLogical(_intersectPt);
-        if (snapModes.grid && gridSettings.snapToGrid) {
-          logical = {
-            x: Math.round(logical.x),
-            y: Math.round(logical.y),
-            z: activeIsoplane === 'top' ? activeElevation : Math.round(logical.z),
-          };
-        }
+      // 6. Return Drafting Plane Snap (In the air at activeElevation!)
+      if (draftingPlanePt) {
         return {
-          logical,
+          logical: draftingPlanePt,
           screen: mouseScreen,
           type: 'grid' as const,
         };
@@ -1154,7 +1381,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
       return null;
     },
-    [lines, arcs, magnetSnapEnabled, snapModes, activeIsoplane, activeElevation, gridSettings.snapToGrid]
+    [lines, arcs, magnetSnapEnabled, snapModes, activeIsoplane, activeElevation, gridSettings.snapToGrid, activeTool]
   );
 
   // -------------------------------------------------------------
@@ -1174,7 +1401,11 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
       if (marker) {
         marker.position.copy(snapPos);
-        marker.visible = activeTool === 'line' || activeTool === 'circle';
+        marker.visible =
+          activeTool === 'line' ||
+          activeTool === 'circle' ||
+          activeTool === 'arc' ||
+          activeTool === 'cylinder';
       }
 
       if (snapRing) {
@@ -1219,37 +1450,8 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       } else if (activeTool === 'circle' && activeAnchorRef.current) {
         const centerThree = logicalToThree(activeAnchorRef.current);
         const radius = Math.max(1, Math.round(centerThree.distanceTo(snapPos)));
-
-        const points: THREE.Vector3[] = [];
-        const segs = 48;
-        for (let i = 0; i <= segs; i++) {
-          const theta = (i / segs) * Math.PI * 2;
-          if (activeIsoplane === 'top') {
-            points.push(
-              new THREE.Vector3(
-                centerThree.x + radius * Math.cos(theta),
-                centerThree.y,
-                centerThree.z + radius * Math.sin(theta)
-              )
-            );
-          } else if (activeIsoplane === 'front') {
-            points.push(
-              new THREE.Vector3(
-                centerThree.x + radius * Math.cos(theta),
-                centerThree.y + radius * Math.sin(theta),
-                centerThree.z
-              )
-            );
-          } else {
-            points.push(
-              new THREE.Vector3(
-                centerThree.x,
-                centerThree.y + radius * Math.sin(theta),
-                centerThree.z + radius * Math.cos(theta)
-              )
-            );
-          }
-        }
+        const normThree = logicalToThreeNormal(activeNormalRef.current);
+        const points = getArcPoints(centerThree, radius, normThree, 0, 360, 48);
 
         const circleGeo = new THREE.BufferGeometry().setFromPoints(points);
         const circleMat = new THREE.LineDashedMaterial({
@@ -1264,11 +1466,298 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         const rGeo = new THREE.BufferGeometry().setFromPoints([centerThree, snapPos]);
         const rMat = new THREE.LineBasicMaterial({ color: 0x818cf8 });
         prevGroup.add(new THREE.Line(rGeo, rMat));
+      } else if (activeTool === 'arc' && activeAnchorRef.current) {
+        const centerThree = logicalToThree(activeAnchorRef.current);
+        const radius = Math.max(1, Math.round(centerThree.distanceTo(snapPos)));
+        const normThree = logicalToThreeNormal(activeNormalRef.current);
+        // Half Arc: 180° semicircle
+        const points = getArcPoints(centerThree, radius, normThree, 0, 180, 48);
+
+        const arcGeo = new THREE.BufferGeometry().setFromPoints(points);
+        const arcMat = new THREE.LineDashedMaterial({
+          color: 0x4f46e5,
+          dashSize: 0.5,
+          gapSize: 0.25,
+        });
+        const arcLine = new THREE.Line(arcGeo, arcMat);
+        arcLine.computeLineDistances();
+        prevGroup.add(arcLine);
+
+        // Baseline across the half arc diameter
+        if (points.length >= 2) {
+          const dGeo = new THREE.BufferGeometry().setFromPoints([points[0], points[points.length - 1]]);
+          prevGroup.add(new THREE.Line(dGeo, new THREE.LineBasicMaterial({ color: 0x818cf8 })));
+        }
+      } else if (activeTool === 'cylinder') {
+        const cDraft = cylinderDraftRef.current;
+        if (cDraft.step === 1 && activeAnchorRef.current) {
+          // Step 1: Base radius preview
+          const centerThree = logicalToThree(activeAnchorRef.current);
+          const radius = Math.max(1, Math.round(centerThree.distanceTo(snapPos)));
+          const normThree = logicalToThreeNormal(activeNormalRef.current);
+          const points = getArcPoints(centerThree, radius, normThree, 0, 360, 48);
+
+          const circleGeo = new THREE.BufferGeometry().setFromPoints(points);
+          const circleMat = new THREE.LineDashedMaterial({
+            color: 0x4f46e5,
+            dashSize: 0.5,
+            gapSize: 0.25,
+          });
+          const circle = new THREE.Line(circleGeo, circleMat);
+          circle.computeLineDistances();
+          prevGroup.add(circle);
+
+          const rGeo = new THREE.BufferGeometry().setFromPoints([centerThree, snapPos]);
+          prevGroup.add(new THREE.Line(rGeo, new THREE.LineBasicMaterial({ color: 0x818cf8 })));
+        } else if (cDraft.step === 2 && cDraft.center) {
+          // Step 2: Height along normal preview
+          const centerThree = logicalToThree(cDraft.center);
+          const normThree = logicalToThreeNormal(cDraft.normal);
+          const axisLine = new THREE.Line3(
+            centerThree.clone().addScaledVector(normThree, -100),
+            centerThree.clone().addScaledVector(normThree, 100)
+          );
+          const closestPointOnAxis = new THREE.Vector3();
+          const camera = activeCameraRef.current;
+          if (camera) {
+            _mouseVec.set(
+              (snap.screen.x / (mountRef.current?.clientWidth || 1)) * 2 - 1,
+              -(snap.screen.y / (mountRef.current?.clientHeight || 1)) * 2 + 1
+            );
+            _raycaster.setFromCamera(_mouseVec, camera);
+            _raycaster.ray.distanceSqToSegment(axisLine.start, axisLine.end, undefined, closestPointOnAxis);
+          }
+          const signedH = closestPointOnAxis.clone().sub(centerThree).dot(normThree);
+          const height = Math.max(1, Math.round(Math.abs(signedH)));
+
+          const { basePoints, topPoints, silhouetteLines, midPoint, quaternion } = getCylinderGeometryData(
+            centerThree,
+            cDraft.radius,
+            height,
+            normThree
+          );
+
+          const dashMat = new THREE.LineDashedMaterial({ color: 0x4f46e5, dashSize: 0.5, gapSize: 0.25 });
+          const baseLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(basePoints), dashMat);
+          baseLine.computeLineDistances();
+          prevGroup.add(baseLine);
+
+          const topLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(topPoints), dashMat);
+          topLine.computeLineDistances();
+          prevGroup.add(topLine);
+
+          silhouetteLines.forEach(([p1, p2]) => {
+            const sLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([p1, p2]), dashMat);
+            sLine.computeLineDistances();
+            prevGroup.add(sLine);
+          });
+
+          // Translucent cylinder preview mesh
+          const cylGeo = new THREE.CylinderGeometry(cDraft.radius, cDraft.radius, height, 32, 1, false);
+          const cylMat = new THREE.MeshBasicMaterial({
+            color: 0x6366f1,
+            transparent: true,
+            opacity: 0.25,
+            side: THREE.DoubleSide,
+          });
+          const cylMesh = new THREE.Mesh(cylGeo, cylMat);
+          cylMesh.position.copy(midPoint);
+          cylMesh.quaternion.copy(quaternion);
+          prevGroup.add(cylMesh);
+        }
       }
 
       requestRender();
     },
     [activeTool, activeIsoplane, requestRender]
+  );
+
+  // Switch Blender-style alignment mode on-the-fly
+  const switchAlignmentMode = useCallback(
+    (newMode: AlignmentMode) => {
+      setAlignmentMode(newMode);
+      const snap = currentSnapRef.current;
+      const targetNorm = getDraftingNormal(newMode, snap?.logical, snap?.faceData);
+      activeNormalRef.current = targetNorm;
+      if (cylinderDraftRef.current.step > 0) {
+        cylinderDraftRef.current.normal = targetNorm;
+      }
+      if (snap) {
+        updatePreviewAndMarkers(snap);
+      }
+    },
+    [getDraftingNormal, updatePreviewAndMarkers]
+  );
+
+  // Elevate active drafting height up / down (Keys: E and Q)
+  const handleStepElevation = useCallback(
+    (delta: number) => {
+      const nextElev = (activeElevationRef.current ?? 0) + delta;
+      activeElevationRef.current = nextElev;
+      onSetElevation?.(nextElev);
+
+      const snap = currentSnapRef.current;
+      if (snap) {
+        if (activeIsoplane === 'top') {
+          snap.logical.z = nextElev;
+        } else if (activeIsoplane === 'front') {
+          snap.logical.y = nextElev;
+        } else {
+          snap.logical.x = nextElev;
+        }
+        updatePreviewAndMarkers(snap);
+      }
+      requestRender();
+    },
+    [onSetElevation, activeIsoplane, updatePreviewAndMarkers, requestRender]
+  );
+
+  // Blender Keyboard Shortcuts (E / Q Elevate, Z, Y, X, V, N, F9)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.key === 'F9') {
+        e.preventDefault();
+        setIsOperatorOpen((prev) => !prev);
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+
+      // Key E: Elevate UP by 1 (or Shift+E to extrude selected circle to cylinder)
+      if (key === 'e' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.shiftKey && selectedArcId) {
+          const arc = arcs.find((a) => a.id === selectedArcId);
+          if (arc) {
+            e.preventDefault();
+            const norm =
+              arc.normal ??
+              (arc.plane === 'top'
+                ? { x: 0, y: 0, z: 1 }
+                : arc.plane === 'front'
+                ? { x: 0, y: 1, z: 0 }
+                : { x: 1, y: 0, z: 0 });
+            const newCyl: DrawingCylinder = {
+              id: `cylinder-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              center: { ...arc.center },
+              radius: arc.radius,
+              height: 6,
+              normal: norm,
+              layerId: activeLayerId,
+              style: { stroke: '#111827', strokeWidth: 1.75, lineType: 'solid' },
+            };
+            onAddCylinder?.(newCyl);
+            onSelectArc?.(null);
+            onSelectCylinder?.(newCyl.id);
+            requestRender();
+            return;
+          }
+        }
+        e.preventDefault();
+        handleStepElevation(1);
+        return;
+      }
+
+      // Key Q: Elevate DOWN by 1
+      if (key === 'q' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        handleStepElevation(-1);
+        return;
+      }
+
+      if (activeTool === 'circle' || activeTool === 'arc' || activeTool === 'cylinder') {
+        if (key === 'z') {
+          switchAlignmentMode('world-z');
+        } else if (key === 'y') {
+          switchAlignmentMode('world-y');
+        } else if (key === 'x') {
+          switchAlignmentMode('world-x');
+        } else if (key === 'v') {
+          switchAlignmentMode('view');
+        } else if (key === 'n') {
+          switchAlignmentMode('surface');
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    activeTool,
+    selectedArcId,
+    arcs,
+    activeLayerId,
+    onAddCylinder,
+    onSelectArc,
+    onSelectCylinder,
+    switchAlignmentMode,
+    handleStepElevation,
+    requestRender,
+  ]);
+
+  // Blender-style Operator Panel updates (Adjust Last Operation)
+  const handleOperatorUpdate = useCallback(
+    (updates: {
+      alignmentMode?: AlignmentMode;
+      radius?: number;
+      height?: number;
+      invertNormal?: boolean;
+    }) => {
+      if (!lastCreatedEntity) return;
+
+      const newRadius = updates.radius !== undefined ? Math.max(1, updates.radius) : lastCreatedEntity.radius;
+      const newHeight = updates.height !== undefined ? Math.max(1, updates.height) : (lastCreatedEntity.height ?? 5);
+      const newAlign = updates.alignmentMode ?? lastCreatedEntity.alignmentMode;
+      let newNormal = { ...lastCreatedEntity.normal };
+
+      if (updates.alignmentMode) {
+        newNormal = getDraftingNormal(updates.alignmentMode, lastCreatedEntity.center);
+      }
+      if (updates.invertNormal) {
+        newNormal = { x: -newNormal.x, y: -newNormal.y, z: -newNormal.z };
+      }
+
+      if (lastCreatedEntity.type === 'cylinder') {
+        const existing = cylinders.find((c) => c.id === lastCreatedEntity.id);
+        if (existing) {
+          const updated: DrawingCylinder = {
+            ...existing,
+            radius: newRadius,
+            height: newHeight,
+            normal: newNormal,
+          };
+          onUpdateCylinder?.(updated);
+        }
+      } else if (lastCreatedEntity.type === 'circle' || lastCreatedEntity.type === 'arc') {
+        const existing = arcs.find((a) => a.id === lastCreatedEntity.id);
+        if (existing) {
+          const updated: DrawingArc = {
+            ...existing,
+            radius: newRadius,
+            normal: newNormal,
+          };
+          onUpdateArc?.(updated);
+        }
+      }
+
+      setLastCreatedEntity((prev) =>
+        prev
+          ? {
+              ...prev,
+              radius: newRadius,
+              height: newHeight,
+              normal: newNormal,
+              alignmentMode: newAlign,
+            }
+          : null
+      );
+      requestRender();
+    },
+    [lastCreatedEntity, cylinders, arcs, getDraftingNormal, onUpdateCylinder, onUpdateArc, requestRender]
   );
 
   // -------------------------------------------------------------
@@ -1335,6 +1824,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     }
 
     // Direct DOM Tooltip update (0 React re-renders)
+    // Direct DOM Tooltip update (0 React re-renders)
     if (tooltipRef.current) {
       let tag = `X:${snap.logical.x} Y:${snap.logical.y} Z:${snap.logical.z || 0} • [${snap.type.toUpperCase()}]`;
       if (activeTool === 'circle' && activeAnchorRef.current) {
@@ -1342,6 +1832,39 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         const vCur = logicalToThree(snap.logical);
         const r = Math.max(1, Math.round(vStart.distanceTo(vCur)));
         tag = `Circle R:${r} • ${tag}`;
+      } else if (activeTool === 'arc' && activeAnchorRef.current) {
+        const vStart = logicalToThree(activeAnchorRef.current);
+        const vCur = logicalToThree(snap.logical);
+        const r = Math.max(1, Math.round(vStart.distanceTo(vCur)));
+        tag = `Half Arc (180°) R:${r} • ${tag}`;
+      } else if (activeTool === 'cylinder') {
+        const cDraft = cylinderDraftRef.current;
+        if (cDraft.step === 1 && activeAnchorRef.current) {
+          const vStart = logicalToThree(activeAnchorRef.current);
+          const vCur = logicalToThree(snap.logical);
+          const r = Math.max(1, Math.round(vStart.distanceTo(vCur)));
+          tag = `Cylinder Base R:${r} (Click to confirm radius) • ${tag}`;
+        } else if (cDraft.step === 2 && cDraft.center) {
+          const centerThree = logicalToThree(cDraft.center);
+          const normThree = logicalToThreeNormal(cDraft.normal);
+          const axisLine = new THREE.Line3(
+            centerThree.clone().addScaledVector(normThree, -100),
+            centerThree.clone().addScaledVector(normThree, 100)
+          );
+          const closestPointOnAxis = new THREE.Vector3();
+          const camera = activeCameraRef.current;
+          if (camera) {
+            _mouseVec.set(
+              (snap.screen.x / (mountRef.current?.clientWidth || 1)) * 2 - 1,
+              -(snap.screen.y / (mountRef.current?.clientHeight || 1)) * 2 + 1
+            );
+            _raycaster.setFromCamera(_mouseVec, camera);
+            _raycaster.ray.distanceSqToSegment(axisLine.start, axisLine.end, undefined, closestPointOnAxis);
+          }
+          const signedH = closestPointOnAxis.clone().sub(centerThree).dot(normThree);
+          const height = Math.max(1, Math.round(Math.abs(signedH)));
+          tag = `Cylinder R:${cDraft.radius} Height:${height} (Click to complete) • ${tag}`;
+        }
       }
       tooltipRef.current.style.display = 'block';
       tooltipRef.current.style.left = `${snap.screen.x + 14}px`;
@@ -1389,6 +1912,8 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
     } else if (activeTool === 'circle') {
       if (!activeAnchorRef.current) {
+        const targetNormal = getDraftingNormal(alignmentMode, snap.logical, snap.faceData);
+        activeNormalRef.current = targetNormal;
         onSetAnchor(snap.logical);
       } else {
         const vStart = logicalToThree(activeAnchorRef.current);
@@ -1399,11 +1924,118 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           id: `arc-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           center: { ...activeAnchorRef.current },
           radius,
+          normal: { ...activeNormalRef.current },
+          startAngle: 0,
+          endAngle: 360,
           plane: activeIsoplane,
           layerId: activeLayerId,
           style: { stroke: '#111827', strokeWidth: 1.75, lineType: 'solid' },
         };
         onAddArc?.(newArc);
+        setLastCreatedEntity({
+          type: 'circle',
+          id: newArc.id,
+          radius: newArc.radius,
+          normal: { ...activeNormalRef.current },
+          alignmentMode,
+          center: newArc.center,
+          startAngle: 0,
+          endAngle: 360,
+        });
+        setIsOperatorOpen(true);
+        onSetAnchor(null);
+      }
+    } else if (activeTool === 'arc') {
+      if (!activeAnchorRef.current) {
+        const targetNormal = getDraftingNormal(alignmentMode, snap.logical, snap.faceData);
+        activeNormalRef.current = targetNormal;
+        onSetAnchor(snap.logical);
+      } else {
+        const vStart = logicalToThree(activeAnchorRef.current);
+        const vCur = logicalToThree(snap.logical);
+        const radius = Math.max(1, Math.round(vStart.distanceTo(vCur)));
+
+        const newArc: DrawingArc = {
+          id: `arc-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          center: { ...activeAnchorRef.current },
+          radius,
+          normal: { ...activeNormalRef.current },
+          startAngle: 0,
+          endAngle: 180, // Half Arc!
+          plane: activeIsoplane,
+          layerId: activeLayerId,
+          style: { stroke: '#111827', strokeWidth: 1.75, lineType: 'solid' },
+        };
+        onAddArc?.(newArc);
+        setLastCreatedEntity({
+          type: 'arc',
+          id: newArc.id,
+          radius: newArc.radius,
+          normal: { ...activeNormalRef.current },
+          alignmentMode,
+          center: newArc.center,
+          startAngle: 0,
+          endAngle: 180,
+        });
+        setIsOperatorOpen(true);
+        onSetAnchor(null);
+      }
+    } else if (activeTool === 'cylinder') {
+      const cDraft = cylinderDraftRef.current;
+      if (cDraft.step === 0) {
+        const targetNormal = getDraftingNormal(alignmentMode, snap.logical, snap.faceData);
+        activeNormalRef.current = targetNormal;
+        cDraft.step = 1;
+        cDraft.center = snap.logical;
+        cDraft.normal = targetNormal;
+        onSetAnchor(snap.logical);
+      } else if (cDraft.step === 1) {
+        const vStart = logicalToThree(cDraft.center!);
+        const vCur = logicalToThree(snap.logical);
+        cDraft.radius = Math.max(1, Math.round(vStart.distanceTo(vCur)));
+        cDraft.step = 2;
+      } else if (cDraft.step === 2) {
+        const centerThree = logicalToThree(cDraft.center!);
+        const normThree = logicalToThreeNormal(cDraft.normal);
+        const axisLine = new THREE.Line3(
+          centerThree.clone().addScaledVector(normThree, -100),
+          centerThree.clone().addScaledVector(normThree, 100)
+        );
+        const closestPointOnAxis = new THREE.Vector3();
+        const camera = activeCameraRef.current;
+        if (camera) {
+          _mouseVec.set(
+            (snap.screen.x / (mountRef.current?.clientWidth || 1)) * 2 - 1,
+            -(snap.screen.y / (mountRef.current?.clientHeight || 1)) * 2 + 1
+          );
+          _raycaster.setFromCamera(_mouseVec, camera);
+          _raycaster.ray.distanceSqToSegment(axisLine.start, axisLine.end, undefined, closestPointOnAxis);
+        }
+        const signedH = closestPointOnAxis.clone().sub(centerThree).dot(normThree);
+        const height = Math.max(1, Math.round(Math.abs(signedH)));
+
+        const newCyl: DrawingCylinder = {
+          id: `cylinder-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          center: { ...cDraft.center! },
+          radius: cDraft.radius,
+          height,
+          normal: { ...cDraft.normal },
+          layerId: activeLayerId,
+          style: { stroke: '#111827', strokeWidth: 1.75, lineType: 'solid' },
+        };
+        onAddCylinder?.(newCyl);
+        setLastCreatedEntity({
+          type: 'cylinder',
+          id: newCyl.id,
+          radius: newCyl.radius,
+          height: newCyl.height,
+          normal: newCyl.normal,
+          alignmentMode,
+          center: newCyl.center,
+        });
+        setIsOperatorOpen(true);
+        cDraft.step = 0;
+        cDraft.center = null;
         onSetAnchor(null);
       }
     } else if (activeTool === 'select' || activeTool === 'eraser') {
@@ -1412,6 +2044,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           onSelectVertex?.(snap.logical);
           onSelectLine(null);
           onSelectArc?.(null);
+          onSelectCylinder?.(null);
           onSelectFace?.(null);
         } else {
           onSelectVertex?.(null);
@@ -1421,6 +2054,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           onSelectFace?.(snap.faceData);
           onSelectLine(null);
           onSelectArc?.(null);
+          onSelectCylinder?.(null);
           onSelectVertex?.(null);
         } else {
           onSelectFace?.(null);
@@ -1428,24 +2062,43 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       } else {
         let hitLineId = snap.lineId || null;
         let hitArcId: string | null = null;
+        let hitCylinderId: string | null = null;
 
         if (!hitLineId) {
           arcs.forEach((arc) => {
             const cThree = logicalToThree(arc.center);
             const clickThree = logicalToThree(snap.logical);
             const dist = Math.abs(clickThree.distanceTo(cThree) - arc.radius);
-            if (dist < 1.2) hitArcId = arc.id;
+            if (dist < 1.5) hitArcId = arc.id;
+          });
+        }
+
+        if (!hitLineId && !hitArcId) {
+          cylinders.forEach((cyl) => {
+            const cThree = logicalToThree(cyl.center);
+            const clickThree = logicalToThree(snap.logical);
+            const nThree = cyl.normal ? logicalToThreeNormal(cyl.normal) : new THREE.Vector3(0, 1, 0);
+            const diff = clickThree.clone().sub(cThree);
+            const hProj = diff.dot(nThree);
+            if (hProj >= -0.5 && hProj <= cyl.height + 0.5) {
+              const radDist = diff.clone().addScaledVector(nThree, -hProj).length();
+              if (Math.abs(radDist - cyl.radius) < 1.5 || radDist <= cyl.radius) {
+                hitCylinderId = cyl.id;
+              }
+            }
           });
         }
 
         if (activeTool === 'select') {
           onSelectLine(hitLineId);
           onSelectArc?.(hitArcId);
+          onSelectCylinder?.(hitCylinderId);
           onSelectVertex?.(null);
           onSelectFace?.(null);
         } else if (activeTool === 'eraser') {
           if (hitLineId) onRemoveLine(hitLineId);
           if (hitArcId) onRemoveArc?.(hitArcId);
+          if (hitCylinderId) onRemoveCylinder?.(hitCylinderId);
         }
       }
     }
@@ -1456,11 +2109,13 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     if (e.button === 2 && pointerDownPosRef.current && pointerDownPosRef.current.button === 2) {
       const dist = Math.hypot(e.clientX - pointerDownPosRef.current.x, e.clientY - pointerDownPosRef.current.y);
       if (dist < 4) {
+        cylinderDraftRef.current = { step: 0, center: null, radius: 5, normal: { x: 0, y: 0, z: 1 } };
         if (activeAnchorRef.current) {
           onSetAnchor(null);
         } else {
           onSelectLine(null);
           onSelectArc?.(null);
+          onSelectCylinder?.(null);
           onSelectVertex?.(null);
           onSelectFace?.(null);
         }
@@ -1675,6 +2330,66 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           >
             <Square size={12} strokeWidth={2} />
             <span>Face</span>
+          </button>
+        </div>
+
+        <div style={{ width: 1, height: 16, backgroundColor: '#e5e7eb' }} />
+
+        {/* Elevation Z (Q / E) Stepper */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            backgroundColor: '#f8fafc',
+            borderRadius: 6,
+            padding: '2px 4px',
+            border: '1px solid #e2e8f0',
+          }}
+          title="Elevate drawing height along Z-axis (Keys: Q to lower, E to raise)"
+        >
+          <button
+            onClick={() => handleStepElevation(-1)}
+            title="Lower Elevation Z by 1 (Key: Q)"
+            style={{
+              padding: '2px 5px',
+              fontSize: 10,
+              fontWeight: 700,
+              color: '#475569',
+              backgroundColor: '#ffffff',
+              border: '1px solid #cbd5e1',
+              borderRadius: 4,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+            }}
+          >
+            <kbd style={{ fontSize: 9, fontWeight: 800, color: '#6366f1' }}>Q</kbd>
+            <span>-</span>
+          </button>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#1e293b', minWidth: 44, textAlign: 'center' }}>
+            Z: {activeElevation >= 0 ? `+${activeElevation}` : activeElevation}
+          </span>
+          <button
+            onClick={() => handleStepElevation(1)}
+            title="Raise Elevation Z by 1 (Key: E)"
+            style={{
+              padding: '2px 5px',
+              fontSize: 10,
+              fontWeight: 700,
+              color: '#475569',
+              backgroundColor: '#ffffff',
+              border: '1px solid #cbd5e1',
+              borderRadius: 4,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+            }}
+          >
+            <span>+</span>
+            <kbd style={{ fontSize: 9, fontWeight: 800, color: '#6366f1' }}>E</kbd>
           </button>
         </div>
 
@@ -1924,6 +2639,329 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }}
       />
 
+      {/* Blender-Style Alignment Mode Floating Bar */}
+      {(activeTool === 'circle' || activeTool === 'arc' || activeTool === 'cylinder') && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 48,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            backgroundColor: 'rgba(15, 23, 42, 0.92)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255, 255, 255, 0.15)',
+            borderRadius: 8,
+            padding: '4px 8px',
+            boxShadow: '0 4px 14px rgba(0, 0, 0, 0.25)',
+            zIndex: 30,
+            color: '#f8fafc',
+          }}
+        >
+          <span style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', marginRight: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Align:
+          </span>
+          {[
+            { mode: 'world-z' as const, key: 'Z', label: 'World Z (Top)' },
+            { mode: 'world-y' as const, key: 'Y', label: 'World Y (Front)' },
+            { mode: 'world-x' as const, key: 'X', label: 'World X (Side)' },
+            { mode: 'view' as const, key: 'V', label: 'View (Camera)' },
+            { mode: 'surface' as const, key: 'N', label: 'Surface Normal' },
+          ].map((item) => {
+            const isActive = alignmentMode === item.mode;
+            return (
+              <button
+                key={item.mode}
+                onClick={() => switchAlignmentMode(item.mode)}
+                title={`Align to ${item.label} (Hotkey: ${item.key})`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '3px 8px',
+                  fontSize: 11,
+                  fontWeight: isActive ? 700 : 500,
+                  color: isActive ? '#ffffff' : '#cbd5e1',
+                  backgroundColor: isActive ? '#4f46e5' : 'rgba(255, 255, 255, 0.08)',
+                  border: isActive ? '1px solid #818cf8' : '1px solid transparent',
+                  borderRadius: 5,
+                  cursor: 'pointer',
+                  transition: 'all 0.12s ease',
+                }}
+              >
+                <kbd
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 800,
+                    padding: '1px 4px',
+                    borderRadius: 3,
+                    backgroundColor: isActive ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.15)',
+                    color: isActive ? '#e0e7ff' : '#94a3b8',
+                  }}
+                >
+                  {item.key}
+                </kbd>
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Blender-Style "Adjust Last Operation" Operator Panel (Bottom-Left) */}
+      {lastCreatedEntity && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 66,
+            left: 14,
+            zIndex: 35,
+            minWidth: 260,
+            maxWidth: 300,
+            backgroundColor: 'rgba(24, 24, 27, 0.95)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255, 255, 255, 0.18)',
+            borderRadius: 8,
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
+            color: '#f4f4f5',
+            fontSize: 11,
+            overflow: 'hidden',
+          }}
+        >
+          {/* Header */}
+          <div
+            onClick={() => setIsOperatorOpen(!isOperatorOpen)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '6px 10px',
+              backgroundColor: 'rgba(39, 39, 42, 0.9)',
+              borderBottom: isOperatorOpen ? '1px solid rgba(255, 255, 255, 0.12)' : 'none',
+              cursor: 'pointer',
+              fontWeight: 700,
+              letterSpacing: '0.02em',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {isOperatorOpen ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+              <span>
+                {lastCreatedEntity.type === 'cylinder'
+                  ? 'Add Cylinder'
+                  : lastCreatedEntity.type === 'arc'
+                  ? 'Add Half Arc'
+                  : 'Add Circle'}
+              </span>
+            </div>
+            <span style={{ fontSize: 9, color: '#a1a1aa', fontWeight: 500 }}>F9 to toggle</span>
+          </div>
+
+          {/* Collapsible Body */}
+          {isOperatorOpen && (
+            <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Alignment Selector */}
+              <div>
+                <label style={{ fontSize: 10, color: '#a1a1aa', display: 'block', marginBottom: 4 }}>
+                  Align:
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
+                  {(
+                    [
+                      { id: 'world-z', label: 'World Z' },
+                      { id: 'world-y', label: 'World Y' },
+                      { id: 'world-x', label: 'World X' },
+                      { id: 'view', label: 'View' },
+                      { id: 'surface', label: 'Surface' },
+                    ] as const
+                  ).map((m) => {
+                    const isSel = lastCreatedEntity.alignmentMode === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        onClick={() => handleOperatorUpdate({ alignmentMode: m.id })}
+                        style={{
+                          padding: '3px 4px',
+                          fontSize: 10,
+                          fontWeight: isSel ? 700 : 500,
+                          backgroundColor: isSel ? '#4f46e5' : 'rgba(255, 255, 255, 0.08)',
+                          color: isSel ? '#ffffff' : '#d4d4d8',
+                          border: isSel ? '1px solid #818cf8' : '1px solid transparent',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {m.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Radius Control */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <label style={{ fontSize: 10, color: '#a1a1aa' }}>Radius:</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button
+                    onClick={() => handleOperatorUpdate({ radius: Math.max(1, lastCreatedEntity.radius - 1) })}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: 'rgba(255,255,255,0.1)',
+                      border: 'none',
+                      borderRadius: 4,
+                      color: '#ffffff',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    min={1}
+                    value={lastCreatedEntity.radius}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      if (!isNaN(v) && v > 0) handleOperatorUpdate({ radius: v });
+                    }}
+                    style={{
+                      width: 48,
+                      textAlign: 'center',
+                      backgroundColor: 'rgba(0,0,0,0.4)',
+                      border: '1px solid rgba(255,255,255,0.2)',
+                      borderRadius: 4,
+                      color: '#ffffff',
+                      fontSize: 11,
+                      padding: '2px 0',
+                    }}
+                  />
+                  <button
+                    onClick={() => handleOperatorUpdate({ radius: lastCreatedEntity.radius + 1 })}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: 'rgba(255,255,255,0.1)',
+                      border: 'none',
+                      borderRadius: 4,
+                      color: '#ffffff',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
+              {/* Height Control (Cylinder only) */}
+              {lastCreatedEntity.type === 'cylinder' && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <label style={{ fontSize: 10, color: '#a1a1aa' }}>Height:</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button
+                      onClick={() => handleOperatorUpdate({ height: Math.max(1, (lastCreatedEntity.height ?? 5) - 1) })}
+                      style={{
+                        width: 22,
+                        height: 22,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: 'rgba(255,255,255,0.1)',
+                        border: 'none',
+                        borderRadius: 4,
+                        color: '#ffffff',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      value={lastCreatedEntity.height ?? 5}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value);
+                        if (!isNaN(v) && v > 0) handleOperatorUpdate({ height: v });
+                      }}
+                      style={{
+                        width: 48,
+                        textAlign: 'center',
+                        backgroundColor: 'rgba(0,0,0,0.4)',
+                        border: '1px solid rgba(255,255,255,0.2)',
+                        borderRadius: 4,
+                        color: '#ffffff',
+                        fontSize: 11,
+                        padding: '2px 0',
+                      }}
+                    />
+                    <button
+                      onClick={() => handleOperatorUpdate({ height: (lastCreatedEntity.height ?? 5) + 1 })}
+                      style={{
+                        width: 22,
+                        height: 22,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: 'rgba(255,255,255,0.1)',
+                        border: 'none',
+                        borderRadius: 4,
+                        color: '#ffffff',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Normal Vector Readout & Invert */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  paddingTop: 4,
+                  borderTop: '1px solid rgba(255,255,255,0.1)',
+                }}
+              >
+                <div style={{ fontSize: 9, color: '#a1a1aa' }}>
+                  Normal: ({Number(lastCreatedEntity.normal.x.toFixed(2))},{' '}
+                  {Number(lastCreatedEntity.normal.y.toFixed(2))},{' '}
+                  {Number((lastCreatedEntity.normal.z ?? 0).toFixed(2))})
+                </div>
+                <button
+                  onClick={() => handleOperatorUpdate({ invertNormal: true })}
+                  title="Flip orientation normal 180°"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    padding: '2px 6px',
+                    fontSize: 9,
+                    fontWeight: 600,
+                    backgroundColor: 'rgba(255,255,255,0.1)',
+                    border: 'none',
+                    borderRadius: 3,
+                    color: '#e4e4e7',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <RefreshCw size={10} />
+                  <span>Flip</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Navigation Guide Watermark (Bottom-Left) */}
       <div
         style={{
@@ -1948,6 +2986,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         <span>&bull; <strong>Wheel</strong>: Zoom &bull; <strong>Right-Click Tap / Esc</strong>: Cancel</span>
         <span>&bull; Numpad 1/3/7: <strong>Views</strong> &bull; Numpad 5: <strong>Ortho/Persp</strong> &bull; F: <strong>Frame</strong></span>
         <span>&bull; Shift+Tab: <strong>Magnet Snap</strong> &bull; Hold Ctrl: <strong>Invert Snap</strong></span>
+        <span>&bull; <strong>Q / E</strong>: <strong>Elevate Z (- / +)</strong> &bull; Z/Y/X/V/N: <strong>Align</strong> &bull; F9: <strong>Adjust Last Op</strong></span>
       </div>
     </div>
   );

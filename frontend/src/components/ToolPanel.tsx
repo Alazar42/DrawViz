@@ -4,6 +4,8 @@ import { IsoplaneType } from '../geometry/isometric';
 import {
   PenLine,
   Circle,
+  Disc,
+  Cylinder,
   Eraser,
   MousePointer,
   Hand,
@@ -14,6 +16,7 @@ import {
   Magnet,
   Grid,
   Layers,
+  Sparkles,
   ChevronUp,
   ChevronDown,
 } from 'lucide-react';
@@ -46,7 +49,9 @@ export const ToolPanel: React.FC<ToolPanelProps> = ({
   const tools: { id: ToolType; label: string; icon: React.ReactNode; shortcut: string }[] = [
     { id: 'line', label: 'Line', icon: <PenLine size={16} />, shortcut: 'L' },
     { id: 'circle', label: 'Circle', icon: <Circle size={16} />, shortcut: 'C' },
-    { id: 'eraser', label: 'Erase', icon: <Eraser size={16} />, shortcut: 'E' },
+    { id: 'arc', label: 'Half Arc', icon: <Disc size={16} />, shortcut: 'A' },
+    { id: 'cylinder', label: 'Cylinder', icon: <Cylinder size={16} />, shortcut: 'Y' },
+    { id: 'eraser', label: 'Erase', icon: <Eraser size={16} />, shortcut: 'X' },
     { id: 'select', label: 'Select', icon: <MousePointer size={16} />, shortcut: 'V' },
     { id: 'pan', label: 'Pan', icon: <Hand size={16} />, shortcut: 'H / Space' },
     { id: 'zoom', label: 'Zoom', icon: <ZoomIn size={16} />, shortcut: 'Z' },
@@ -200,7 +205,7 @@ export const ToolPanel: React.FC<ToolPanelProps> = ({
           </div>
         </div>
 
-        {/* DRAFTING PLANE Section */}
+        {/* BLENDER-STYLE AUTO SURFACE ALIGN Section */}
         <div>
           <div
             style={{
@@ -216,135 +221,35 @@ export const ToolPanel: React.FC<ToolPanelProps> = ({
               gap: 4,
             }}
           >
-            <Layers size={11} />
-            <span>Drafting Plane</span>
+            <Sparkles size={11} />
+            <span>Surface Align</span>
           </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {/* Elevation Stepper */}
-            <div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  fontSize: 11,
-                  color: '#374151',
-                  marginBottom: 4,
-                  padding: '0 4px',
-                }}
-              >
-                <span>Elevation (Z)</span>
-                <span style={{ fontSize: 9, color: '#9ca3af' }}>[ / ]</span>
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  backgroundColor: '#f9fafb',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: 4,
-                  padding: '2px 4px',
-                }}
-              >
-                <button
-                  onClick={() => onSetElevation(activeElevation - 1)}
-                  title="Lower Elevation Plane ([)"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: '2px 4px',
-                    borderRadius: 3,
-                    display: 'flex',
-                    alignItems: 'center',
-                    color: '#4b5563',
-                  }}
-                >
-                  <ChevronDown size={14} />
-                </button>
-                <span
-                  style={{
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: activeElevation !== 0 ? '#4f46e5' : '#111827',
-                  }}
-                >
-                  {activeElevation >= 0 ? `+${activeElevation}` : activeElevation}
-                </span>
-                <button
-                  onClick={() => onSetElevation(activeElevation + 1)}
-                  title="Raise Elevation Plane (])"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: '2px 4px',
-                    borderRadius: 3,
-                    display: 'flex',
-                    alignItems: 'center',
-                    color: '#4b5563',
-                  }}
-                >
-                  <ChevronUp size={14} />
-                </button>
-              </div>
+          <div
+            style={{
+              padding: '8px 8px',
+              backgroundColor: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: 4,
+              fontSize: 11,
+              color: '#475569',
+              lineHeight: 1.4,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontWeight: 600,
+                color: '#0f172a',
+                marginBottom: 4,
+              }}
+            >
+              <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#22c55e' }} />
+              <span>Auto Normal</span>
             </div>
-
-            {/* Isoplane Switcher (F5) */}
-            <div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  fontSize: 11,
-                  color: '#374151',
-                  marginBottom: 4,
-                  padding: '0 4px',
-                }}
-              >
-                <span>Isoplane</span>
-                <span style={{ fontSize: 9, color: '#9ca3af' }}>F5</span>
-              </div>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(3, 1fr)',
-                  gap: 2,
-                  backgroundColor: '#f3f4f6',
-                  padding: 2,
-                  borderRadius: 4,
-                  border: '1px solid #e5e7eb',
-                }}
-              >
-                {(['top', 'front', 'side'] as const).map((iso) => {
-                  const isCur = activeIsoplane === iso;
-                  return (
-                    <button
-                      key={iso}
-                      onClick={() => onSetIsoplane(iso)}
-                      style={{
-                        padding: '3px 0',
-                        fontSize: 9,
-                        fontWeight: isCur ? 700 : 500,
-                        border: 'none',
-                        borderRadius: 3,
-                        cursor: 'pointer',
-                        backgroundColor: isCur ? '#ffffff' : 'transparent',
-                        color: isCur ? '#111827' : '#6b7280',
-                        boxShadow: isCur ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
-                        textTransform: 'uppercase',
-                      }}
-                      title={`Switch to ${iso.toUpperCase()} Isoplane (F5)`}
-                    >
-                      {iso}
-                    </button>
-                  );
-                })}
-              </div>
+            <div style={{ fontSize: 10, color: '#64748b' }}>
+              Snaps flush to any inclined, vertical, or horizontal plane automatically (Blender style).
             </div>
           </div>
         </div>

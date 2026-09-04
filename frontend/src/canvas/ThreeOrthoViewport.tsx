@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback, memo } from 'react';
 import * as THREE from 'three';
-import { DrawingLine, DrawingArc, Point3D } from '../types/drawing';
+import { DrawingLine, DrawingArc, DrawingCylinder, Point3D } from '../types/drawing';
 import { extractFacesFromLines } from '../geometry/faces';
+import { getArcPoints, getCylinderGeometryData, logicalToThreeNormal } from '../geometry/circle3d';
 
 export type OrthoCameraViewType = 'top' | 'front' | 'side';
 
@@ -10,6 +11,7 @@ interface ThreeOrthoViewportProps {
   viewType: OrthoCameraViewType;
   lines: DrawingLine[];
   arcs?: DrawingArc[];
+  cylinders?: DrawingCylinder[];
   selectedLineId?: string | null;
   onSelectLine?: (lineId: string | null) => void;
   hideOccluded?: boolean;
@@ -26,6 +28,7 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
   viewType,
   lines,
   arcs = [],
+  cylinders = [],
   selectedLineId,
   onSelectLine,
   hideOccluded = true,
@@ -243,30 +246,46 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
     // 3. Arcs
     arcs.forEach((arc) => {
       const cThree = logicalToThree(arc.center);
-      const r = arc.radius;
-      const pts: THREE.Vector3[] = [];
-      const segs = 36;
-      const sRad = ((arc.startAngle ?? 0) * Math.PI) / 180;
-      const eRad = ((arc.endAngle ?? 360) * Math.PI) / 180;
-
-      for (let i = 0; i <= segs; i++) {
-        const t = sRad + (i / segs) * (eRad - sRad);
-        if (arc.plane === 'top') {
-          pts.push(new THREE.Vector3(cThree.x + r * Math.cos(t), cThree.y, cThree.z + r * Math.sin(t)));
-        } else if (arc.plane === 'front') {
-          pts.push(new THREE.Vector3(cThree.x + r * Math.cos(t), cThree.y + r * Math.sin(t), cThree.z));
-        } else {
-          pts.push(new THREE.Vector3(cThree.x, cThree.y + r * Math.sin(t), cThree.z + r * Math.cos(t)));
-        }
+      let normalThree: THREE.Vector3;
+      if (arc.normal) {
+        normalThree = logicalToThreeNormal(arc.normal);
+      } else if (arc.plane === 'top') {
+        normalThree = new THREE.Vector3(0, 1, 0);
+      } else if (arc.plane === 'front') {
+        normalThree = new THREE.Vector3(0, 0, 1);
+      } else {
+        normalThree = new THREE.Vector3(1, 0, 0);
       }
+      const sDeg = arc.startAngle ?? 0;
+      const eDeg = arc.endAngle ?? 360;
+      const pts = getArcPoints(cThree, arc.radius, normalThree, sDeg, eDeg, 36);
 
       const arcGeo = new THREE.BufferGeometry().setFromPoints(pts);
       const arcMat = new THREE.LineBasicMaterial({ color: 0x0f172a, linewidth: 1.5 });
       geoGroup.add(new THREE.Line(arcGeo, arcMat));
     });
 
+    // 4. Cylinders
+    cylinders.forEach((cyl) => {
+      const cThree = logicalToThree(cyl.center);
+      const normalThree = cyl.normal ? logicalToThreeNormal(cyl.normal) : new THREE.Vector3(0, 1, 0);
+      const { basePoints, topPoints, silhouetteLines } = getCylinderGeometryData(
+        cThree,
+        cyl.radius,
+        cyl.height,
+        normalThree
+      );
+
+      const cylLineMat = new THREE.LineBasicMaterial({ color: 0x0f172a, linewidth: 1.5 });
+      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(basePoints), cylLineMat));
+      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(topPoints), cylLineMat));
+      silhouetteLines.forEach(([p1, p2]) => {
+        geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([p1, p2]), cylLineMat));
+      });
+    });
+
     requestRender();
-  }, [lines, arcs, hideOccluded, requestRender]);
+  }, [lines, arcs, cylinders, hideOccluded, requestRender]);
 
   // 4. Update Highlight Layer (Hover & Selection) - Instant lightweight update!
   useEffect(() => {

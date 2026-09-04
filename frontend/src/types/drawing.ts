@@ -31,9 +31,20 @@ export interface DrawingArc {
   id: string;
   center: Point3D;
   radius: number; // in logical grid units
-  plane: IsoplanePlane;
+  plane?: IsoplanePlane;
+  normal?: Point3D; // true 3D normal vector for inclined planes
   startAngle?: number; // degrees, default 0
   endAngle?: number;   // degrees, default 360
+  layerId: string;
+  style?: LineStyle;
+}
+
+export interface DrawingCylinder {
+  id: string;
+  center: Point3D; // base center
+  radius: number;  // radius
+  height: number;  // height along normal
+  normal: Point3D; // cylinder axis normal
   layerId: string;
   style?: LineStyle;
 }
@@ -70,12 +81,14 @@ export interface DrawVizProject {
   layers: Layer[];
   lines: DrawingLine[];
   arcs?: DrawingArc[];
+  cylinders?: DrawingCylinder[];
   activeLessonId?: string;
 }
 
-export type ToolType = 'select' | 'line' | 'circle' | 'eraser' | 'pan' | 'zoom';
+export type ToolType = 'select' | 'line' | 'circle' | 'arc' | 'cylinder' | 'eraser' | 'pan' | 'zoom';
 export type AppMode = 'practice' | 'lessons' | 'challenges';
 export type SelectionMode = 'vertex' | 'edge' | 'face';
+export type AlignmentMode = 'world-z' | 'world-y' | 'world-x' | 'view' | 'surface';
 
 export interface Face3D {
   id: string;

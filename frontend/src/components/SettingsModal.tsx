@@ -20,7 +20,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const shortcuts = [
     { key: 'L', description: 'Line Tool (Click to start, click to end, continuous)' },
     { key: 'V', description: 'Select Tool (Click line to inspect/delete)' },
-    { key: 'E', description: 'Eraser Tool (Click line to remove)' },
+    { key: 'X', description: 'Eraser Tool (Click line to remove)' },
     { key: 'H / Space + Drag', description: 'Pan canvas workspace' },
     { key: 'Escape', description: 'Cancel active line drafting' },
     { key: 'Delete / Backspace', description: 'Delete selected geometry' },

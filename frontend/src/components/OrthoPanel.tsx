@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, memo } from 'react';
-import { DrawingLine, DrawingArc } from '../types/drawing';
+import { DrawingLine, DrawingArc, DrawingCylinder } from '../types/drawing';
 import { ThreeOrthoViewport } from '../canvas/ThreeOrthoViewport';
 import { ChevronDown, ChevronUp, GripHorizontal } from 'lucide-react';
 
 interface OrthoPanelProps {
   lines: DrawingLine[];
   arcs?: DrawingArc[];
+  cylinders?: DrawingCylinder[];
   isOpen: boolean;
   onToggle: () => void;
   selectedLineId?: string | null;
@@ -15,6 +16,7 @@ interface OrthoPanelProps {
 export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
   lines,
   arcs = [],
+  cylinders = [],
   isOpen,
   onToggle,
   selectedLineId,
@@ -235,6 +237,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
               viewType="top"
               lines={lines}
               arcs={arcs}
+              cylinders={cylinders}
               selectedLineId={selectedLineId}
               onSelectLine={onSelectLine}
               hideOccluded={hideOccluded}
@@ -244,6 +247,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
               viewType="front"
               lines={lines}
               arcs={arcs}
+              cylinders={cylinders}
               selectedLineId={selectedLineId}
               onSelectLine={onSelectLine}
               hideOccluded={hideOccluded}
@@ -253,6 +257,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
               viewType="side"
               lines={lines}
               arcs={arcs}
+              cylinders={cylinders}
               selectedLineId={selectedLineId}
               onSelectLine={onSelectLine}
               hideOccluded={hideOccluded}
@@ -277,6 +282,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
                 viewType="top"
                 lines={lines}
                 arcs={arcs}
+                cylinders={cylinders}
                 selectedLineId={selectedLineId}
                 onSelectLine={onSelectLine}
                 hideOccluded={hideOccluded}
@@ -288,6 +294,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
                 viewType="front"
                 lines={lines}
                 arcs={arcs}
+                cylinders={cylinders}
                 selectedLineId={selectedLineId}
                 onSelectLine={onSelectLine}
                 hideOccluded={hideOccluded}
@@ -299,6 +306,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
                 viewType="side"
                 lines={lines}
                 arcs={arcs}
+                cylinders={cylinders}
                 selectedLineId={selectedLineId}
                 onSelectLine={onSelectLine}
                 hideOccluded={hideOccluded}

@@ -1,20 +1,24 @@
-import { DrawingLine, DrawingArc, Layer, ToolType, Point3D, Face3D } from '../types/drawing';
+import { DrawingLine, DrawingArc, DrawingCylinder, Layer, ToolType, Point3D, Face3D } from '../types/drawing';
 import { calculateLogicalLength, getLineDirection } from '../geometry/isometric';
-import { Trash2, Sparkles } from 'lucide-react';
+import { Trash2, Sparkles, Box, ArrowUpCircle } from 'lucide-react';
 
 interface PropertyPanelProps {
   selectedLine: DrawingLine | null;
   selectedArc?: DrawingArc | null;
+  selectedCylinder?: DrawingCylinder | null;
   selectedVertex?: Point3D | null;
   selectedFace?: Face3D | null;
   totalLines: number;
   totalArcs?: number;
+  totalCylinders?: number;
   layers: Layer[];
   unitSize: number;
   zoom: number;
   activeTool: ToolType;
   onDeleteLine: (id: string) => void;
   onDeleteArc?: (id: string) => void;
+  onDeleteCylinder?: (id: string) => void;
+  onExtrudeArc?: (arc: DrawingArc) => void;
   onUpdateLineStyle: (id: string, style: Partial<DrawingLine['style']>) => void;
   onSketchOnFace?: (face: Face3D) => void;
 }
@@ -22,16 +26,20 @@ interface PropertyPanelProps {
 export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   selectedLine,
   selectedArc = null,
+  selectedCylinder = null,
   selectedVertex = null,
   selectedFace = null,
   totalLines,
   totalArcs = 0,
+  totalCylinders = 0,
   layers,
   unitSize,
   zoom,
   activeTool,
   onDeleteLine,
   onDeleteArc,
+  onDeleteCylinder,
+  onExtrudeArc,
   onUpdateLineStyle,
   onSketchOnFace,
 }) => {
@@ -169,11 +177,13 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>
             <span style={{ color: '#6b7280' }}>Entity</span>
-            <span style={{ fontWeight: 500 }}>Isocircle</span>
+            <span style={{ fontWeight: 600, color: '#4f46e5' }}>
+              {(selectedArc.endAngle ?? 360) - (selectedArc.startAngle ?? 0) <= 180 ? 'Half Arc (180°)' : 'Circle (360°)'}
+            </span>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>
-            <span style={{ color: '#6b7280' }}>Plane</span>
+            <span style={{ color: '#6b7280' }}>Plane / Normal</span>
             <span
               style={{
                 backgroundColor: '#ede9fe',
@@ -181,9 +191,12 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
                 padding: '1px 5px',
                 borderRadius: 3,
                 fontWeight: 600,
+                fontSize: 10,
               }}
             >
-              {selectedArc.plane.toUpperCase()}
+              {selectedArc.normal
+                ? `[${selectedArc.normal.x}, ${selectedArc.normal.y}, ${selectedArc.normal.z || 0}]`
+                : (selectedArc.plane || 'TOP').toUpperCase()}
             </span>
           </div>
 
@@ -209,8 +222,93 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
             <span style={{ fontWeight: 500 }}>{arcLayer}</span>
           </div>
 
+          {onExtrudeArc && (
+            <button
+              onClick={() => onExtrudeArc(selectedArc)}
+              style={{
+                marginTop: 4,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                padding: '6px 8px',
+                backgroundColor: '#4f46e5',
+                border: 'none',
+                borderRadius: 4,
+                color: '#ffffff',
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+              title="Extrude circle into 3D cylinder (E)"
+            >
+              <ArrowUpCircle size={13} />
+              <span>Extrude to Cylinder (E)</span>
+            </button>
+          )}
+
           <button
             onClick={() => onDeleteArc?.(selectedArc.id)}
+            style={{
+              marginTop: 2,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              padding: '5px 8px',
+              backgroundColor: '#ffffff',
+              border: '1px solid #e5e7eb',
+              borderRadius: 4,
+              color: '#dc2626',
+              fontSize: 11,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            <Trash2 size={12} />
+            <span>Delete Circle</span>
+          </button>
+        </div>
+      ) : selectedCylinder ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>
+            <span style={{ color: '#6b7280' }}>Entity</span>
+            <span style={{ fontWeight: 600, color: '#4f46e5' }}>3D Cylinder</span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>
+            <span style={{ color: '#6b7280' }}>Center</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+              ({selectedCylinder.center.x}, {selectedCylinder.center.y}, {selectedCylinder.center.z || 0})
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>
+            <span style={{ color: '#6b7280' }}>Radius (R)</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{selectedCylinder.radius}</span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>
+            <span style={{ color: '#6b7280' }}>Height (H)</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{selectedCylinder.height}</span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>
+            <span style={{ color: '#6b7280' }}>Normal</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 10 }}>
+              [{selectedCylinder.normal?.x ?? 0}, {selectedCylinder.normal?.y ?? 0}, {selectedCylinder.normal?.z ?? 1}]
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>
+            <span style={{ color: '#6b7280' }}>Volume</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+              {Math.round(Math.PI * selectedCylinder.radius * selectedCylinder.radius * selectedCylinder.height)}
+            </span>
+          </div>
+
+          <button
+            onClick={() => onDeleteCylinder?.(selectedCylinder.id)}
             style={{
               marginTop: 4,
               display: 'flex',
@@ -228,7 +326,7 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
             }}
           >
             <Trash2 size={12} />
-            <span>Delete Isocircle</span>
+            <span>Delete Cylinder</span>
           </button>
         </div>
       ) : selectedVertex ? (
@@ -328,7 +426,7 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
           <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>
             <span style={{ color: '#6b7280' }}>Entities</span>
             <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
-              {totalLines} lines{totalArcs > 0 ? `, ${totalArcs} circles` : ''}
+              {totalLines} lines{totalArcs > 0 ? `, ${totalArcs} circles` : ''}{totalCylinders > 0 ? `, ${totalCylinders} cylinders` : ''}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', color: '#374151' }}>

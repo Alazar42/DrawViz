@@ -273,7 +273,7 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       const params = getIsocircleEllipseParams(
         arc.center,
         arc.radius,
-        arc.plane,
+        arc.plane || 'top',
         gridSettings.unitSize,
         viewport,
         arc.startAngle ?? 0,
@@ -658,7 +658,7 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
           screenPt,
           arc.center,
           arc.radius,
-          arc.plane,
+          arc.plane || 'top',
           gridSettings.unitSize,
           viewport,
           arc.startAngle ?? 0,

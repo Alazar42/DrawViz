@@ -3,6 +3,7 @@ import {
   AppMode,
   DrawingLine,
   DrawingArc,
+  DrawingCylinder,
   GridSettings,
   Layer,
   Point3D,
@@ -24,6 +25,7 @@ export interface CursorState {
 interface HistorySnapshot {
   lines: DrawingLine[];
   arcs: DrawingArc[];
+  cylinders: DrawingCylinder[];
 }
 
 const DEFAULT_LAYERS: Layer[] = [
@@ -48,10 +50,12 @@ const INITIAL_DEMO_LINES: DrawingLine[] = STEPPED_INCLINE_TARGET_LINES.map((l) =
 export function useDrawingState() {
   const [lines, setLinesState] = useState<DrawingLine[]>(INITIAL_DEMO_LINES);
   const [arcs, setArcsState] = useState<DrawingArc[]>([]);
+  const [cylinders, setCylindersState] = useState<DrawingCylinder[]>([]);
   const [layers, setLayers] = useState<Layer[]>(DEFAULT_LAYERS);
   const [activeLayerId, setActiveLayerId] = useState<string>('layer-1');
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
   const [selectedArcId, setSelectedArcId] = useState<string | null>(null);
+  const [selectedCylinderId, setSelectedCylinderId] = useState<string | null>(null);
   const [activeTool, setActiveTool] = useState<ToolType>('line');
   const [gridSettings, setGridSettingsState] = useState<GridSettings>(DEFAULT_GRID_SETTINGS);
   const [viewport, setViewportState] = useState<ViewportTransform>({
@@ -94,100 +98,144 @@ export function useDrawingState() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // History stack for Undo/Redo (stores both lines & arcs)
+  // History stack for Undo/Redo (stores lines, arcs, cylinders)
   const [undoStack, setUndoStack] = useState<HistorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<HistorySnapshot[]>([]);
 
-  const pushToHistory = useCallback((currentLines: DrawingLine[], currentArcs: DrawingArc[]) => {
-    setUndoStack((prev) => [...prev.slice(-30), { lines: currentLines, arcs: currentArcs }]);
+  const pushToHistory = useCallback((currentLines: DrawingLine[], currentArcs: DrawingArc[], currentCylinders: DrawingCylinder[] = cylinders) => {
+    setUndoStack((prev) => [...prev.slice(-30), { lines: currentLines, arcs: currentArcs, cylinders: currentCylinders }]);
     setRedoStack([]);
-  }, []);
+  }, [cylinders]);
 
   const setLines = useCallback(
     (newLines: DrawingLine[] | ((prev: DrawingLine[]) => DrawingLine[])) => {
       setLinesState((prev) => {
         const next = typeof newLines === 'function' ? newLines(prev) : newLines;
-        pushToHistory(prev, arcs);
+        pushToHistory(prev, arcs, cylinders);
         return next;
       });
     },
-    [pushToHistory, arcs]
+    [pushToHistory, arcs, cylinders]
   );
 
   const addLine = useCallback(
     (line: DrawingLine) => {
       setLinesState((prev) => {
-        pushToHistory(prev, arcs);
+        pushToHistory(prev, arcs, cylinders);
         return [...prev, line];
       });
     },
-    [pushToHistory, arcs]
+    [pushToHistory, arcs, cylinders]
   );
 
   const removeLine = useCallback(
     (id: string) => {
       setLinesState((prev) => {
-        pushToHistory(prev, arcs);
+        pushToHistory(prev, arcs, cylinders);
         return prev.filter((l) => l.id !== id);
       });
       if (selectedLineId === id) setSelectedLineId(null);
     },
-    [pushToHistory, arcs, selectedLineId]
+    [pushToHistory, arcs, cylinders, selectedLineId]
   );
 
   const setArcs = useCallback(
     (newArcs: DrawingArc[] | ((prev: DrawingArc[]) => DrawingArc[])) => {
       setArcsState((prev) => {
         const next = typeof newArcs === 'function' ? newArcs(prev) : newArcs;
-        pushToHistory(lines, prev);
+        pushToHistory(lines, prev, cylinders);
         return next;
       });
     },
-    [pushToHistory, lines]
+    [pushToHistory, lines, cylinders]
   );
 
   const addArc = useCallback(
     (arc: DrawingArc) => {
       setArcsState((prev) => {
-        pushToHistory(lines, prev);
+        pushToHistory(lines, prev, cylinders);
         return [...prev, arc];
       });
     },
-    [pushToHistory, lines]
+    [pushToHistory, lines, cylinders]
   );
 
   const removeArc = useCallback(
     (id: string) => {
       setArcsState((prev) => {
-        pushToHistory(lines, prev);
+        pushToHistory(lines, prev, cylinders);
         return prev.filter((a) => a.id !== id);
       });
       if (selectedArcId === id) setSelectedArcId(null);
     },
-    [pushToHistory, lines, selectedArcId]
+    [pushToHistory, lines, cylinders, selectedArcId]
   );
+
+  const setCylinders = useCallback(
+    (newCylinders: DrawingCylinder[] | ((prev: DrawingCylinder[]) => DrawingCylinder[])) => {
+      setCylindersState((prev) => {
+        const next = typeof newCylinders === 'function' ? newCylinders(prev) : newCylinders;
+        pushToHistory(lines, arcs, prev);
+        return next;
+      });
+    },
+    [pushToHistory, lines, arcs]
+  );
+
+  const addCylinder = useCallback(
+    (cylinder: DrawingCylinder) => {
+      setCylindersState((prev) => {
+        pushToHistory(lines, arcs, prev);
+        return [...prev, cylinder];
+      });
+    },
+    [pushToHistory, lines, arcs]
+  );
+
+  const removeCylinder = useCallback(
+    (id: string) => {
+      setCylindersState((prev) => {
+        pushToHistory(lines, arcs, prev);
+        return prev.filter((c) => c.id !== id);
+      });
+      if (selectedCylinderId === id) setSelectedCylinderId(null);
+    },
+    [pushToHistory, lines, arcs, selectedCylinderId]
+  );
+
+  const updateArc = useCallback((arc: DrawingArc) => {
+    setArcsState((prev) => prev.map((a) => (a.id === arc.id ? arc : a)));
+  }, []);
+
+  const updateCylinder = useCallback((cylinder: DrawingCylinder) => {
+    setCylindersState((prev) => prev.map((c) => (c.id === cylinder.id ? cylinder : c)));
+  }, []);
 
   const undo = useCallback(() => {
     if (undoStack.length === 0) return;
     const previous = undoStack[undoStack.length - 1];
     setUndoStack((prev) => prev.slice(0, -1));
-    setRedoStack((prev) => [...prev, { lines, arcs }]);
+    setRedoStack((prev) => [...prev, { lines, arcs, cylinders }]);
     setLinesState(previous.lines);
     setArcsState(previous.arcs);
+    setCylindersState(previous.cylinders || []);
     setSelectedLineId(null);
     setSelectedArcId(null);
-  }, [undoStack, lines, arcs]);
+    setSelectedCylinderId(null);
+  }, [undoStack, lines, arcs, cylinders]);
 
   const redo = useCallback(() => {
     if (redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1];
     setRedoStack((prev) => prev.slice(0, -1));
-    setUndoStack((prev) => [...prev, { lines, arcs }]);
+    setUndoStack((prev) => [...prev, { lines, arcs, cylinders }]);
     setLinesState(next.lines);
     setArcsState(next.arcs);
+    setCylindersState(next.cylinders || []);
     setSelectedLineId(null);
     setSelectedArcId(null);
-  }, [redoStack, lines, arcs]);
+    setSelectedCylinderId(null);
+  }, [redoStack, lines, arcs, cylinders]);
 
   const setViewport = useCallback((updates: Partial<ViewportTransform>) => {
     setViewportState((prev) => ({ ...prev, ...updates }));
@@ -198,13 +246,15 @@ export function useDrawingState() {
   }, []);
 
   const resetCanvas = useCallback(() => {
-    pushToHistory(lines, arcs);
+    pushToHistory(lines, arcs, cylinders);
     setLinesState([]);
     setArcsState([]);
+    setCylindersState([]);
     setSelectedLineId(null);
     setSelectedArcId(null);
+    setSelectedCylinderId(null);
     setActiveAnchor(null);
-  }, [lines, arcs, pushToHistory]);
+  }, [lines, arcs, cylinders, pushToHistory]);
 
   const addLayer = useCallback(() => {
     const newId = `layer-${layers.length + 1}`;
@@ -276,10 +326,20 @@ export function useDrawingState() {
     setArcsState,
     setArcs,
     addArc,
+    updateArc,
     removeArc,
     selectedArcId,
     setSelectedArcId,
     selectedArc: arcs.find((a) => a.id === selectedArcId) || null,
+    cylinders,
+    setCylindersState,
+    setCylinders,
+    addCylinder,
+    updateCylinder,
+    removeCylinder,
+    selectedCylinderId,
+    setSelectedCylinderId,
+    selectedCylinder: cylinders.find((c) => c.id === selectedCylinderId) || null,
     showOrthoPanel,
     setShowOrthoPanel,
     undo,
