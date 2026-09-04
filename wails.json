@@ -1,0 +1,13 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "DrawViz",
+  "outputfilename": "DrawViz",
+  "frontend:install": "echo dependencies ready",
+  "frontend:build": "npm.cmd run build",
+  "frontend:dev:watcher": "npm.cmd run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Alazar42",
+    "email": "alazartesfaye42@gmail.com"
+  }
+}
