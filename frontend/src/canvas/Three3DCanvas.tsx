@@ -16,12 +16,9 @@ import { CursorState } from '../state/drawingState';
 import { cursorStore } from '../state/cursorStore';
 import { extractFacesFromLines } from '../geometry/faces';
 import {
-  Eye,
-  Camera,
   Layers,
   RotateCcw,
   Sparkles,
-  MousePointer,
   Square,
   Minus,
   Dot,
@@ -58,6 +55,18 @@ interface Three3DCanvasProps {
   onSetElevation?: (elevation: number) => void;
   onSetIsoplane?: (isoplane: IsoplaneType) => void;
 }
+
+// Reusable math objects for zero garbage collection
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _raycaster = new THREE.Raycaster();
+const _mouseVec = new THREE.Vector2();
+const _draftingPlane = new THREE.Plane();
+const _intersectPt = new THREE.Vector3();
+const _rotMatrix = new THREE.Matrix4();
+const _gizmoVx = new THREE.Vector3();
+const _gizmoVy = new THREE.Vector3();
+const _gizmoVz = new THREE.Vector3();
 
 // Convert DrawViz logical (X, Y: depth, Z: height) to Three.js world space:
 // X_three = X_logical, Y_three = Z_logical (Up), Z_three = Y_logical (Depth)
@@ -110,6 +119,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   const perspCameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const activeCameraRef = useRef<THREE.Camera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const gizmoCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Dynamic 3D Scene Groups
   const geometryGroupRef = useRef<THREE.Group>(new THREE.Group());
@@ -147,19 +157,15 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     grid: true,
   });
 
-  // Gizmo State
-  const [gizmoRot, setGizmoRot] = useState<{ x: number; y: number; z: number }[]>([
-    { x: 1, y: 0, z: 0 },
-    { x: 0, y: 0, z: 1 },
-    { x: 0, y: 1, z: 0 },
-  ]);
-
-  // Tooltip element reference (direct DOM for 0 React re-renders)
+  // Direct DOM refs for zero-overhead updates
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const badgeRef = useRef<HTMLSpanElement>(null);
 
-  // Active Anchor & Snap Refs
+  // Active Anchor & Pointer Position Refs
   const activeAnchorRef = useRef<Point3D | null>(activeAnchor);
   activeAnchorRef.current = activeAnchor;
+
+  const pointerDownPosRef = useRef<{ x: number; y: number; button: number } | null>(null);
 
   const currentSnapRef = useRef<{
     logical: Point3D;
@@ -169,65 +175,111 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     faceData?: Face3D | null;
   } | null>(null);
 
-  // Render Throttle / On-Demand Loop
-  const needsRenderRef = useRef<boolean>(false);
-  const dampingCounterRef = useRef<number>(0);
+  // -------------------------------------------------------------
+  // Zero-Overhead 2D Canvas Orientation Gizmo
+  // -------------------------------------------------------------
+  const renderGizmo = (camera: THREE.Camera) => {
+    const canvas = gizmoCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-  const requestRender = useCallback(() => {
-    if (!needsRenderRef.current) {
-      needsRenderRef.current = true;
-      requestAnimationFrame(renderFrame);
-    }
-  }, []);
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
 
-  const renderFrame = () => {
-    needsRenderRef.current = false;
-    const renderer = rendererRef.current;
-    const scene = sceneRef.current;
-    const camera = activeCameraRef.current;
-    const controls = controlsRef.current;
+    const center = w / 2;
+    const r = 28;
 
-    if (!renderer || !scene || !camera) return;
-
-    if (controls) {
-      controls.update();
-    }
-
-    // Orient vertex snap ring towards camera
-    if (vertexSnapRingRef.current && vertexSnapRingRef.current.visible) {
-      vertexSnapRingRef.current.quaternion.copy(camera.quaternion);
-    }
-
-    renderer.render(scene, camera);
-
-    // Update orientation gizmo rotation matrix
-    updateGizmoOrientation();
-
-    // If damping is active, keep rendering until settled
-    if (dampingCounterRef.current > 0) {
-      dampingCounterRef.current--;
-      needsRenderRef.current = true;
-      requestAnimationFrame(renderFrame);
-    }
-  };
-
-  // Update Gizmo orientation based on active camera matrix
-  const updateGizmoOrientation = () => {
-    const camera = activeCameraRef.current;
-    if (!camera) return;
+    // Outer circle
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(center, center, 42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
 
     // View matrix rotation
-    const m = new THREE.Matrix4().extractRotation(camera.matrixWorldInverse);
-    const vX = new THREE.Vector3(1, 0, 0).applyMatrix4(m);
-    const vY = new THREE.Vector3(0, 0, 1).applyMatrix4(m); // depth
-    const vZ = new THREE.Vector3(0, 1, 0).applyMatrix4(m); // up (DrawViz Z)
+    _rotMatrix.extractRotation(camera.matrixWorldInverse);
+    _gizmoVx.set(1, 0, 0).applyMatrix4(_rotMatrix);
+    _gizmoVy.set(0, 0, 1).applyMatrix4(_rotMatrix); // depth
+    _gizmoVz.set(0, 1, 0).applyMatrix4(_rotMatrix); // height
 
-    setGizmoRot([
-      { x: vX.x, y: vX.y, z: vX.z },
-      { x: vY.x, y: vY.y, z: vY.z },
-      { x: vZ.x, y: vZ.y, z: vZ.z },
-    ]);
+    const axes = [
+      { name: 'X', color: '#ef4444', x: _gizmoVx.x, y: _gizmoVx.y, z: _gizmoVx.z },
+      { name: 'Y', color: '#22c55e', x: _gizmoVy.x, y: _gizmoVy.y, z: _gizmoVy.z },
+      { name: 'Z', color: '#3b82f6', x: _gizmoVz.x, y: _gizmoVz.y, z: _gizmoVz.z },
+    ];
+
+    axes.sort((a, b) => a.z - b.z);
+
+    axes.forEach((ax) => {
+      const px = center + ax.x * r;
+      const py = center - ax.y * r;
+      const isFront = ax.z > -0.05;
+
+      // Negative axis dot
+      const negX = center - ax.x * r * 0.72;
+      const negY = center + ax.y * r * 0.72;
+      ctx.fillStyle = ax.color + '55';
+      ctx.beginPath();
+      ctx.arc(negX, negY, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Axis line
+      ctx.strokeStyle = ax.color;
+      ctx.globalAlpha = isFront ? 0.95 : 0.35;
+      ctx.lineWidth = isFront ? 2.5 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(center, center);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      ctx.globalAlpha = 1.0;
+
+      // Positive axis circle
+      ctx.fillStyle = ax.color;
+      ctx.beginPath();
+      ctx.arc(px, py, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Axis label
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ax.name, px, py + 0.5);
+    });
   };
+
+  // -------------------------------------------------------------
+  // Single-Flight Bulletproof On-Demand Rendering
+  // Guaranteed: Max 1 render per VSync frame, 0 runaway recursion!
+  // -------------------------------------------------------------
+  const isRenderPendingRef = useRef<boolean>(false);
+
+  const requestRender = useCallback(() => {
+    if (isRenderPendingRef.current) return;
+    isRenderPendingRef.current = true;
+
+    requestAnimationFrame(() => {
+      isRenderPendingRef.current = false;
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const camera = activeCameraRef.current;
+      if (!renderer || !scene || !camera) return;
+
+      if (vertexSnapRingRef.current && vertexSnapRingRef.current.visible) {
+        vertexSnapRingRef.current.quaternion.copy(camera.quaternion);
+      }
+
+      renderer.render(scene, camera);
+      renderGizmo(camera);
+    });
+  }, []);
 
   // -------------------------------------------------------------
   // 1. Initialize Three.js Scene, Cameras, Controls & On-Demand Loop
@@ -270,7 +322,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     scene.background = new THREE.Color('#f8fafc');
     sceneRef.current = scene;
 
-    // Lighting for solid faces
+    // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
     scene.add(ambientLight);
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
@@ -293,7 +345,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     scene.add(cursorMesh);
     cursorMarkerRef.current = cursorMesh;
 
-    // Blender-style Glowing Amber Vertex Snap Ring
+    // Glowing Amber Vertex Snap Ring
     const ringGeo = new THREE.RingGeometry(0.32, 0.48, 24);
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0xf59e0b,
@@ -305,7 +357,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     scene.add(ringMesh);
     vertexSnapRingRef.current = ringMesh;
 
-    // Blender-style Cyan Edge Snap Marker (Square)
+    // Cyan Edge Snap Marker (Square)
     const edgeGeo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
     const edgeMat = new THREE.MeshBasicMaterial({
       color: 0x06b6d4,
@@ -317,7 +369,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     scene.add(edgeMarker);
     edgeSnapMarkerRef.current = edgeMarker;
 
-    // Blender-style Cyan Midpoint Snap Marker (Octahedron/Diamond)
+    // Cyan Midpoint Snap Marker (Octahedron/Diamond)
     const midGeo = new THREE.OctahedronGeometry(0.3, 0);
     const midMat = new THREE.MeshBasicMaterial({
       color: 0x06b6d4,
@@ -340,25 +392,24 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
     mount.replaceChildren(renderer.domElement);
 
-    // OrbitControls: Blender Standard Configuration!
-    // MMB: Rotate / Orbit
-    // Shift + MMB: Pan
+    // OrbitControls: Direct, Instantaneous 1:1 Response (enableDamping = false)!
+    // RIGHT: Orbit / Rotate (Instantaneous, 0 lag!)
+    // MIDDLE: Pan
+    // Shift + RIGHT: Pan
     // Wheel: Zoom
-    // Left click: Drawing and Selecting
+    // LEFT: Drawing Tools & Selection
     const controls = new OrbitControls(orthoCam, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
+    controls.enableDamping = false; // Zero lag, zero sluggish inertia!
     controls.screenSpacePanning = true;
     controls.mouseButtons = {
       LEFT: -1 as any, // Reserve Left Click for drawing tools & selection!
-      MIDDLE: THREE.MOUSE.ROTATE, // Blender MMB Orbit!
-      RIGHT: -1 as any, // Reserve Right Click for tool cancel / drop anchor!
+      MIDDLE: THREE.MOUSE.PAN, // Middle Click: Pan
+      RIGHT: THREE.MOUSE.ROTATE, // Right Click: ROTATE CAMERA!
     };
     controlsRef.current = controls;
 
-    // OrbitControls trigger demand-driven rendering
+    // On-demand rendering when OrbitControls moves
     controls.addEventListener('change', () => {
-      dampingCounterRef.current = 20;
       requestRender();
     });
 
@@ -397,7 +448,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   }, [requestRender]);
 
   // -------------------------------------------------------------
-  // 2. Blender Shortcuts & Shift/Ctrl Modifier Listeners
+  // 2. Keyboard Modifiers (Shift Pan, Shift+Tab Magnet, Numpad Views)
   // -------------------------------------------------------------
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -406,10 +457,10 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         return;
       }
 
-      // Shift key held -> switch MMB to PAN (Blender standard)
+      // Shift key held -> switch Right Drag to PAN
       if (e.key === 'Shift') {
         if (controlsRef.current) {
-          controlsRef.current.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
+          controlsRef.current.mouseButtons.RIGHT = THREE.MOUSE.PAN;
         }
       }
 
@@ -440,7 +491,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         e.preventDefault();
         frameAll();
       } else if (e.key === 'Escape') {
-        // Cancel active tool anchor or selection
         onSetAnchor(null);
         onSelectLine(null);
         onSelectArc?.(null);
@@ -453,7 +503,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Shift') {
         if (controlsRef.current) {
-          controlsRef.current.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
+          controlsRef.current.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
         }
       }
     };
@@ -468,7 +518,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   }, [onSetAnchor, onSelectLine, onSelectArc, onSelectVertex, onSelectFace, requestRender]);
 
   // -------------------------------------------------------------
-  // 3. Camera View Controls (Blender Presets & Smooth Centering)
+  // 3. Camera View Controls
   // -------------------------------------------------------------
   const setCameraView = useCallback((preset: CameraPreset) => {
     const camera = activeCameraRef.current;
@@ -503,11 +553,9 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     }
     camera.lookAt(0, 0, 0);
     controls.update();
-    dampingCounterRef.current = 10;
     requestRender();
   }, [requestRender]);
 
-  // Invert current view (180° orbit flip, Numpad 9)
   const invertView = useCallback(() => {
     const camera = activeCameraRef.current;
     const controls = controlsRef.current;
@@ -518,11 +566,9 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     camera.position.copy(controls.target).add(offset);
     camera.lookAt(controls.target);
     controls.update();
-    dampingCounterRef.current = 10;
     requestRender();
   }, [requestRender]);
 
-  // Toggle Orthographic / Perspective projection (Numpad 5)
   const togglePerspective = useCallback(() => {
     const orthoCam = orthoCameraRef.current;
     const perspCam = perspCameraRef.current;
@@ -533,14 +579,12 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     setIsPerspective(willBePersp);
 
     if (willBePersp) {
-      // Switch to Perspective
       perspCam.position.copy(orthoCam.position);
       perspCam.rotation.copy(orthoCam.rotation);
       perspCam.up.copy(orthoCam.up);
       activeCameraRef.current = perspCam;
       controls.object = perspCam;
     } else {
-      // Switch to Orthographic
       orthoCam.position.copy(perspCam.position);
       orthoCam.rotation.copy(perspCam.rotation);
       orthoCam.up.copy(perspCam.up);
@@ -549,11 +593,9 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     }
 
     controls.update();
-    dampingCounterRef.current = 10;
     requestRender();
   }, [isPerspective, requestRender]);
 
-  // Frame All / Focus Selection (Numpad . / Home / F)
   const frameAll = useCallback(() => {
     const camera = activeCameraRef.current;
     const controls = controlsRef.current;
@@ -565,7 +607,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       return;
     }
 
-    // Compute bounding box
     const box = new THREE.Box3();
     lines.forEach((l) => {
       box.expandByPoint(logicalToThree(l.start));
@@ -589,12 +630,11 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     camera.position.copy(center).addScaledVector(dir, maxDim * 2.2);
     camera.lookAt(center);
     controls.update();
-    dampingCounterRef.current = 15;
     requestRender();
   }, [lines, arcs, setCameraView, requestRender]);
 
   // -------------------------------------------------------------
-  // 4. Render 3D Grid Plane (Positioned at active elevation & plane)
+  // 4. Render 3D Grid Plane
   // -------------------------------------------------------------
   useEffect(() => {
     const gridGroup = gridGroupRef.current;
@@ -657,7 +697,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
   // -------------------------------------------------------------
   // 5. Render Base 3D Geometry (Lines, Arcs, Solid Faces, Vertex Handles)
-  // Completely isolated from hover events for maximum 60fps performance!
+  // Isolated from hover/drag!
   // -------------------------------------------------------------
   useEffect(() => {
     const geoGroup = geometryGroupRef.current;
@@ -665,7 +705,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     geoGroup.clear();
     faceGroup.clear();
 
-    // 1. Draw 3D Base Lines
     const baseLineMat = new THREE.LineBasicMaterial({
       color: 0x111827,
       linewidth: 2,
@@ -688,7 +727,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       const lineMesh = new THREE.Line(lineGeo, baseLineMat);
       geoGroup.add(lineMesh);
 
-      // Vertex Endpoints
       const m1 = new THREE.Mesh(sphereGeo, sphereMat);
       m1.position.copy(v1);
       geoGroup.add(m1);
@@ -698,7 +736,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       geoGroup.add(m2);
     });
 
-    // 2. Draw 3D Arcs & Isocircles
     arcs.forEach((arc) => {
       const centerThree = logicalToThree(arc.center);
       const r = arc.radius;
@@ -748,7 +785,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       geoGroup.add(cMesh);
     });
 
-    // 3. Extract & Render Coplanar Solid Faces using Memoized Face Extractor
     const extracted = extractFacesFromLines(lines);
     extractedFacesRef.current = extracted;
 
@@ -795,13 +831,12 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   }, [lines, arcs, selectionMode, solidShading, requestRender]);
 
   // -------------------------------------------------------------
-  // 6. Selection Highlights Layer (Selected Vertex, Edge, Face)
+  // 6. Selection Highlights Layer
   // -------------------------------------------------------------
   useEffect(() => {
     const selGroup = selectionHighlightGroupRef.current;
     selGroup.clear();
 
-    // 1. Highlight Selected Line
     if (selectedLineId) {
       const line = lines.find((l) => l.id === selectedLineId);
       if (line) {
@@ -827,7 +862,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
     }
 
-    // 2. Highlight Selected Arc
     if (selectedArcId) {
       const arc = arcs.find((a) => a.id === selectedArcId);
       if (arc) {
@@ -853,7 +887,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
     }
 
-    // 3. Highlight Selected Vertex
     if (selectedVertex) {
       const v = logicalToThree(selectedVertex);
       const selGeo = new THREE.SphereGeometry(0.28, 14, 14);
@@ -863,7 +896,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       selGroup.add(m);
     }
 
-    // 4. Highlight Selected Face
     if (selectedFace) {
       const v = selectedFace.vertices.map(logicalToThree);
       const faceGeo = new THREE.BufferGeometry();
@@ -902,8 +934,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   }, [selectedLineId, selectedArcId, selectedVertex, selectedFace, lines, arcs, requestRender]);
 
   // -------------------------------------------------------------
-  // 7. Blender-Style Snapping Engine (Vertex, Midpoint, Edge, Face, Grid)
-  // Dynamic Ctrl Inversion & Magnet Switch
+  // 7. Blender Snapping Calculations (Optimized: 0 Object Allocations!)
   // -------------------------------------------------------------
   const getScreenSpaceSnap = useCallback(
     (clientX: number, clientY: number, ctrlHeld: boolean) => {
@@ -916,26 +947,24 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       const mouseX = (mouseScreen.x / mount.clientWidth) * 2 - 1;
       const mouseY = -(mouseScreen.y / mount.clientHeight) * 2 + 1;
 
-      // Blender dynamic inversion: holding Ctrl inverts magnet status
       const isSnappingActive = ctrlHeld ? !magnetSnapEnabled : magnetSnapEnabled;
 
       if (!isSnappingActive) {
-        // Raw drafting plane intersection without magnetic snapping
-        const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+        _mouseVec.set(mouseX, mouseY);
+        _raycaster.setFromCamera(_mouseVec, camera);
 
-        let planeNormal = new THREE.Vector3(0, 1, 0);
-        let planeConstant = -activeElevation;
+        let planeNormalX = 0, planeNormalY = 1, planeNormalZ = 0;
         if (activeIsoplane === 'front') {
-          planeNormal = new THREE.Vector3(0, 0, 1);
+          planeNormalY = 0; planeNormalZ = 1;
         } else if (activeIsoplane === 'side') {
-          planeNormal = new THREE.Vector3(1, 0, 0);
+          planeNormalY = 0; planeNormalX = 1;
         }
-        const draftingPlane = new THREE.Plane(planeNormal, planeConstant);
-        const intersectPt = new THREE.Vector3();
-        if (raycaster.ray.intersectPlane(draftingPlane, intersectPt)) {
+        _draftingPlane.normal.set(planeNormalX, planeNormalY, planeNormalZ);
+        _draftingPlane.constant = -activeElevation;
+
+        if (_raycaster.ray.intersectPlane(_draftingPlane, _intersectPt)) {
           return {
-            logical: threeToLogical(intersectPt),
+            logical: threeToLogical(_intersectPt),
             screen: mouseScreen,
             type: 'grid' as const,
           };
@@ -943,18 +972,19 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         return null;
       }
 
-      // 1. VERTEX MAGNETIC SNAP (Tolerance: 18 screen pixels)
+      // 1. VERTEX SNAP
       if (snapModes.vertex) {
         let closestVertex: Point3D | null = null;
         let minVertexDist = 18;
 
         for (let i = 0; i < lines.length; i++) {
           const l = lines[i];
-          for (const pt of [l.start, l.end]) {
-            const v3 = logicalToThree(pt).project(camera);
-            if (v3.z > 1) continue;
-            const sx = ((v3.x + 1) * mount.clientWidth) / 2;
-            const sy = ((-v3.y + 1) * mount.clientHeight) / 2;
+          for (let p = 0; p < 2; p++) {
+            const pt = p === 0 ? l.start : l.end;
+            _v1.set(pt.x, pt.z || 0, pt.y).project(camera);
+            if (_v1.z > 1) continue;
+            const sx = ((_v1.x + 1) * mount.clientWidth) / 2;
+            const sy = ((-_v1.y + 1) * mount.clientHeight) / 2;
             const dist = Math.hypot(mouseScreen.x - sx, mouseScreen.y - sy);
             if (dist < minVertexDist) {
               minVertexDist = dist;
@@ -963,23 +993,24 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           }
         }
 
-        arcs.forEach((a) => {
-          const v3 = logicalToThree(a.center).project(camera);
-          if (v3.z <= 1) {
-            const sx = ((v3.x + 1) * mount.clientWidth) / 2;
-            const sy = ((-v3.y + 1) * mount.clientHeight) / 2;
+        for (let i = 0; i < arcs.length; i++) {
+          const a = arcs[i];
+          _v1.set(a.center.x, a.center.z || 0, a.center.y).project(camera);
+          if (_v1.z <= 1) {
+            const sx = ((_v1.x + 1) * mount.clientWidth) / 2;
+            const sy = ((-_v1.y + 1) * mount.clientHeight) / 2;
             const dist = Math.hypot(mouseScreen.x - sx, mouseScreen.y - sy);
             if (dist < minVertexDist) {
               minVertexDist = dist;
               closestVertex = a.center;
             }
           }
-        });
+        }
 
         if (closestVertex) {
-          const ptThree = logicalToThree(closestVertex).project(camera);
-          const sx = ((ptThree.x + 1) * mount.clientWidth) / 2;
-          const sy = ((-ptThree.y + 1) * mount.clientHeight) / 2;
+          _v1.set(closestVertex.x, closestVertex.z || 0, closestVertex.y).project(camera);
+          const sx = ((_v1.x + 1) * mount.clientWidth) / 2;
+          const sy = ((-_v1.y + 1) * mount.clientHeight) / 2;
           return {
             logical: { ...closestVertex },
             screen: { x: sx, y: sy },
@@ -988,7 +1019,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }
       }
 
-      // 2. EDGE MIDPOINT SNAP (Tolerance: 14 screen pixels)
+      // 2. EDGE MIDPOINT SNAP
       if (snapModes.midpoint) {
         let closestMidpoint: Point3D | null = null;
         let closestLineId: string | null = null;
@@ -996,29 +1027,27 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
         for (let i = 0; i < lines.length; i++) {
           const l = lines[i];
-          const midPt: Point3D = {
-            x: Math.round((l.start.x + l.end.x) / 2),
-            y: Math.round((l.start.y + l.end.y) / 2),
-            z: Math.round(((l.start.z || 0) + (l.end.z || 0)) / 2),
-          };
+          const midX = Math.round((l.start.x + l.end.x) / 2);
+          const midY = Math.round((l.start.y + l.end.y) / 2);
+          const midZ = Math.round(((l.start.z || 0) + (l.end.z || 0)) / 2);
 
-          const v3 = logicalToThree(midPt).project(camera);
-          if (v3.z > 1) continue;
-          const sx = ((v3.x + 1) * mount.clientWidth) / 2;
-          const sy = ((-v3.y + 1) * mount.clientHeight) / 2;
+          _v1.set(midX, midZ, midY).project(camera);
+          if (_v1.z > 1) continue;
+          const sx = ((_v1.x + 1) * mount.clientWidth) / 2;
+          const sy = ((-_v1.y + 1) * mount.clientHeight) / 2;
           const dist = Math.hypot(mouseScreen.x - sx, mouseScreen.y - sy);
 
           if (dist < minMidDist) {
             minMidDist = dist;
-            closestMidpoint = midPt;
+            closestMidpoint = { x: midX, y: midY, z: midZ };
             closestLineId = l.id;
           }
         }
 
         if (closestMidpoint) {
-          const ptThree = logicalToThree(closestMidpoint).project(camera);
-          const sx = ((ptThree.x + 1) * mount.clientWidth) / 2;
-          const sy = ((-ptThree.y + 1) * mount.clientHeight) / 2;
+          _v1.set(closestMidpoint.x, closestMidpoint.z || 0, closestMidpoint.y).project(camera);
+          const sx = ((_v1.x + 1) * mount.clientWidth) / 2;
+          const sy = ((-_v1.y + 1) * mount.clientHeight) / 2;
           return {
             logical: closestMidpoint,
             screen: { x: sx, y: sy },
@@ -1028,7 +1057,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }
       }
 
-      // 3. EDGE PROJECTION SNAP (Tolerance: 10 screen pixels)
+      // 3. EDGE PROJECTION SNAP
       if (snapModes.edge) {
         let closestEdgePt: Point3D | null = null;
         let closestLineId: string | null = null;
@@ -1036,20 +1065,22 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
-          const v1 = logicalToThree(line.start).project(camera);
-          const v2 = logicalToThree(line.end).project(camera);
-          if (v1.z > 1 || v2.z > 1) continue;
+          _v1.set(line.start.x, line.start.z || 0, line.start.y).project(camera);
+          _v2.set(line.end.x, line.end.z || 0, line.end.y).project(camera);
+          if (_v1.z > 1 || _v2.z > 1) continue;
 
-          const s1 = { x: ((v1.x + 1) * mount.clientWidth) / 2, y: ((-v1.y + 1) * mount.clientHeight) / 2 };
-          const s2 = { x: ((v2.x + 1) * mount.clientWidth) / 2, y: ((-v2.y + 1) * mount.clientHeight) / 2 };
+          const s1x = ((_v1.x + 1) * mount.clientWidth) / 2;
+          const s1y = ((-_v1.y + 1) * mount.clientHeight) / 2;
+          const s2x = ((_v2.x + 1) * mount.clientWidth) / 2;
+          const s2y = ((-_v2.y + 1) * mount.clientHeight) / 2;
 
-          const dx = s2.x - s1.x;
-          const dy = s2.y - s1.y;
+          const dx = s2x - s1x;
+          const dy = s2y - s1y;
           const lenSq = dx * dx + dy * dy;
           if (lenSq > 0) {
-            const t = Math.max(0, Math.min(1, ((mouseScreen.x - s1.x) * dx + (mouseScreen.y - s1.y) * dy) / lenSq));
-            const px = s1.x + t * dx;
-            const py = s1.y + t * dy;
+            const t = Math.max(0, Math.min(1, ((mouseScreen.x - s1x) * dx + (mouseScreen.y - s1y) * dy) / lenSq));
+            const px = s1x + t * dx;
+            const py = s1y + t * dy;
             const dist = Math.hypot(mouseScreen.x - px, mouseScreen.y - py);
             if (dist < minEdgeDist) {
               minEdgeDist = dist;
@@ -1073,14 +1104,13 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }
       }
 
-      // 4. FACE RAYCAST SNAP (in Face mode or when snapping to faces)
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
-
+      // 4. FACE RAYCAST SNAP
       if (snapModes.face) {
+        _mouseVec.set(mouseX, mouseY);
+        _raycaster.setFromCamera(_mouseVec, camera);
         const faceGroup = facesGroupRef.current;
         if (faceGroup && faceGroup.children.length > 0) {
-          const hits = raycaster.intersectObjects(faceGroup.children, false);
+          const hits = _raycaster.intersectObjects(faceGroup.children, false);
           if (hits.length > 0) {
             const hit = hits[0];
             const faceData = (hit.object as any).userData?.faceData as Face3D | undefined;
@@ -1094,21 +1124,20 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }
       }
 
-      // 5. DRAFTING PLANE INTERSECTION (Grid Snapping)
-      let planeNormal = new THREE.Vector3(0, 1, 0);
-      let planeConstant = -activeElevation;
+      // 5. DRAFTING PLANE INTERSECTION
+      let planeNormalX = 0, planeNormalY = 1, planeNormalZ = 0;
       if (activeIsoplane === 'front') {
-        planeNormal = new THREE.Vector3(0, 0, 1);
-        planeConstant = -activeElevation;
+        planeNormalY = 0; planeNormalZ = 1;
       } else if (activeIsoplane === 'side') {
-        planeNormal = new THREE.Vector3(1, 0, 0);
-        planeConstant = -activeElevation;
+        planeNormalY = 0; planeNormalX = 1;
       }
+      _draftingPlane.normal.set(planeNormalX, planeNormalY, planeNormalZ);
+      _draftingPlane.constant = -activeElevation;
 
-      const draftingPlane = new THREE.Plane(planeNormal, planeConstant);
-      const intersectPt = new THREE.Vector3();
-      if (raycaster.ray.intersectPlane(draftingPlane, intersectPt)) {
-        let logical = threeToLogical(intersectPt);
+      _mouseVec.set(mouseX, mouseY);
+      _raycaster.setFromCamera(_mouseVec, camera);
+      if (_raycaster.ray.intersectPlane(_draftingPlane, _intersectPt)) {
+        let logical = threeToLogical(_intersectPt);
         if (snapModes.grid && gridSettings.snapToGrid) {
           logical = {
             x: Math.round(logical.x),
@@ -1143,13 +1172,11 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
       const snapPos = logicalToThree(snap.logical);
 
-      // Cursor point marker
       if (marker) {
         marker.position.copy(snapPos);
         marker.visible = activeTool === 'line' || activeTool === 'circle';
       }
 
-      // Vertex snap indicator (Amber Ring)
       if (snapRing) {
         if (snap.type === 'vertex') {
           snapRing.position.copy(snapPos);
@@ -1159,7 +1186,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }
       }
 
-      // Midpoint snap indicator (Cyan Octahedron)
       if (midMarker) {
         if (snap.type === 'midpoint') {
           midMarker.position.copy(snapPos);
@@ -1169,7 +1195,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }
       }
 
-      // Edge snap indicator (Cyan Square)
       if (edgeMarker) {
         if (snap.type === 'edge') {
           edgeMarker.position.copy(snapPos);
@@ -1179,7 +1204,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }
       }
 
-      // Interactive Line Preview
       if (activeTool === 'line' && activeAnchorRef.current) {
         const vStart = logicalToThree(activeAnchorRef.current);
         const vEnd = snapPos;
@@ -1248,9 +1272,15 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   );
 
   // -------------------------------------------------------------
-  // 9. Pointer Event Handlers (Drawing, Selecting, Hovering)
+  // 9. Pointer Event Handlers (High Performance: Zero Drag Overhead!)
   // -------------------------------------------------------------
   const handlePointerMove = (e: React.PointerEvent) => {
+    // CRITICAL: When any button is pressed (right drag rotating or pan), bypass all snapping/raycasting!
+    if (e.buttons !== 0) {
+      if (tooltipRef.current) tooltipRef.current.style.display = 'none';
+      return;
+    }
+
     const snap = getScreenSpaceSnap(e.clientX, e.clientY, e.ctrlKey);
     if (!snap) {
       if (tooltipRef.current) tooltipRef.current.style.display = 'none';
@@ -1260,7 +1290,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     currentSnapRef.current = snap;
     updatePreviewAndMarkers(snap);
 
-    // Update Hover Highlight Layer directly without tearing down scene!
+    // Hover Highlight Layer
     const hlGroup = hoverGroupRef.current;
     hlGroup.clear();
 
@@ -1304,7 +1334,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
     }
 
-    // Direct DOM Tooltip update (0 React overhead)
+    // Direct DOM Tooltip update (0 React re-renders)
     if (tooltipRef.current) {
       let tag = `X:${snap.logical.x} Y:${snap.logical.y} Z:${snap.logical.z || 0} • [${snap.type.toUpperCase()}]`;
       if (activeTool === 'circle' && activeAnchorRef.current) {
@@ -1319,7 +1349,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       tooltipRef.current.textContent = tag;
     }
 
-    // Update global cursorStore (throttled, decoupled from root App)
+    // Update global cursorStore (throttled)
     cursorStore.update({
       screen: snap.screen,
       logical: snap.logical,
@@ -1328,7 +1358,9 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    // Left click only for drawing & selecting
+    pointerDownPosRef.current = { x: e.clientX, y: e.clientY, button: e.button };
+
+    // Right-click and middle-click are reserved for rotation and pan!
     if (e.button !== 0) return;
 
     const snap = currentSnapRef.current;
@@ -1394,7 +1426,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           onSelectFace?.(null);
         }
       } else {
-        // Edge mode
         let hitLineId = snap.lineId || null;
         let hitArcId: string | null = null;
 
@@ -1420,6 +1451,25 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     }
   };
 
+  const handlePointerUp = (e: React.PointerEvent) => {
+    // If user clicked Right Mouse Button without dragging (< 4px), cancel active tool or deselect!
+    if (e.button === 2 && pointerDownPosRef.current && pointerDownPosRef.current.button === 2) {
+      const dist = Math.hypot(e.clientX - pointerDownPosRef.current.x, e.clientY - pointerDownPosRef.current.y);
+      if (dist < 4) {
+        if (activeAnchorRef.current) {
+          onSetAnchor(null);
+        } else {
+          onSelectLine(null);
+          onSelectArc?.(null);
+          onSelectVertex?.(null);
+          onSelectFace?.(null);
+        }
+        requestRender();
+      }
+    }
+    pointerDownPosRef.current = null;
+  };
+
   const handlePointerLeave = () => {
     if (tooltipRef.current) tooltipRef.current.style.display = 'none';
     if (cursorMarkerRef.current) cursorMarkerRef.current.visible = false;
@@ -1427,21 +1477,13 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     if (edgeSnapMarkerRef.current) edgeSnapMarkerRef.current.visible = false;
     if (midpointSnapMarkerRef.current) midpointSnapMarkerRef.current.visible = false;
     hoverGroupRef.current.clear();
+    pointerDownPosRef.current = null;
     requestRender();
   };
 
+  // Prevent default context menu
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    // Blender standard: Right-click cancels drawing / drops active line anchor
-    if (activeAnchorRef.current) {
-      onSetAnchor(null);
-    } else {
-      onSelectLine(null);
-      onSelectArc?.(null);
-      onSelectVertex?.(null);
-      onSelectFace?.(null);
-    }
-    requestRender();
   };
 
   // "Sketch on Face" Handler
@@ -1451,19 +1493,52 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   };
 
   // -------------------------------------------------------------
-  // 10. Interactive 3D Orientation Gizmo Interaction
+  // 10. Interactive 3D Orientation Gizmo Click
   // -------------------------------------------------------------
-  const handleGizmoAxisClick = (axis: 'x' | 'y' | 'z', sign: number) => {
-    if (axis === 'x') {
-      setCameraView(sign > 0 ? 'right' : 'left');
-    } else if (axis === 'z') {
-      setCameraView(sign > 0 ? 'top' : 'bottom');
-    } else if (axis === 'y') {
-      setCameraView(sign > 0 ? 'front' : 'back');
+  const handleGizmoCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = gizmoCanvasRef.current;
+    const camera = activeCameraRef.current;
+    if (!canvas || !camera) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    const center = canvas.width / 2;
+    const r = 28;
+
+    _rotMatrix.extractRotation(camera.matrixWorldInverse);
+    _gizmoVx.set(1, 0, 0).applyMatrix4(_rotMatrix);
+    _gizmoVy.set(0, 0, 1).applyMatrix4(_rotMatrix);
+    _gizmoVz.set(0, 1, 0).applyMatrix4(_rotMatrix);
+
+    const axes = [
+      { name: 'x', x: _gizmoVx.x, y: _gizmoVx.y },
+      { name: 'y', x: _gizmoVy.x, y: _gizmoVy.y },
+      { name: 'z', x: _gizmoVz.x, y: _gizmoVz.y },
+    ];
+
+    for (const ax of axes) {
+      const px = center + ax.x * r;
+      const py = center - ax.y * r;
+      if (Math.hypot(clickX - px, clickY - py) < 12) {
+        if (ax.name === 'x') setCameraView('right');
+        else if (ax.name === 'z') setCameraView('top');
+        else setCameraView('front');
+        return;
+      }
+
+      const negX = center - ax.x * r * 0.72;
+      const negY = center + ax.y * r * 0.72;
+      if (Math.hypot(clickX - negX, clickY - negY) < 8) {
+        if (ax.name === 'x') setCameraView('left');
+        else if (ax.name === 'z') setCameraView('bottom');
+        else setCameraView('back');
+        return;
+      }
     }
   };
 
-  // Text for Blender-style Viewport Badge in top-left
   const viewBadgeText = `${cameraPreset === 'free' ? 'User' : cameraPreset.toUpperCase()} ${
     isPerspective ? 'Perspective' : 'Orthographic'
   }`;
@@ -1484,6 +1559,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         ref={mountRef}
         onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerLeave}
         style={{ width: '100%', height: '100%', display: 'block', cursor: 'crosshair' }}
       />
@@ -1502,6 +1578,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }}
       >
         <span
+          ref={badgeRef}
           style={{
             fontSize: 12,
             fontWeight: 700,
@@ -1517,7 +1594,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         </span>
       </div>
 
-      {/* Blender-Style Top Controls Toolbar (Mode 1/2/3, Magnet Snap, Shading) */}
+      {/* Blender-Style Top Controls Toolbar */}
       <div
         style={{
           position: 'absolute',
@@ -1807,7 +1884,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         </div>
       )}
 
-      {/* Interactive Blender-Style 3D Navigation Gizmo (Top-Right) */}
+      {/* Interactive 3D Navigation Gizmo: Ultra fast 2D canvas with 0 React overhead! */}
       <div
         style={{
           position: 'absolute',
@@ -1818,93 +1895,17 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           zIndex: 35,
         }}
       >
-        <svg
-          width="96"
-          height="96"
-          viewBox="0 0 96 96"
-          style={{ width: '100%', height: '100%', cursor: 'pointer' }}
-        >
-          {/* Gizmo background circle */}
-          <circle cx="48" cy="48" r="42" fill="rgba(255, 255, 255, 0.72)" stroke="#e2e8f0" strokeWidth="1" />
-
-          {/* Render 3D Projected Axes (X: Red, Y: Green, Z: Blue) */}
-          {(() => {
-            const center = 48;
-            const r = 32;
-            const axes = [
-              { name: 'X', color: '#ef4444', dir: gizmoRot[0], axis: 'x' as const },
-              { name: 'Y', color: '#22c55e', dir: gizmoRot[1], axis: 'y' as const },
-              { name: 'Z', color: '#3b82f6', dir: gizmoRot[2], axis: 'z' as const },
-            ];
-
-            // Sort by depth (z)
-            const sorted = [...axes].sort((a, b) => a.dir.z - b.dir.z);
-
-            return sorted.map((ax) => {
-              const px = center + ax.dir.x * r;
-              const py = center - ax.dir.y * r;
-              const isFront = ax.dir.z > -0.05;
-
-              return (
-                <g key={ax.name}>
-                  {/* Axis Line */}
-                  <line
-                    x1={center}
-                    y1={center}
-                    x2={px}
-                    y2={py}
-                    stroke={ax.color}
-                    strokeWidth={isFront ? 2.5 : 1.5}
-                    strokeOpacity={isFront ? 0.95 : 0.35}
-                  />
-
-                  {/* Negative Dot */}
-                  <circle
-                    cx={center - ax.dir.x * r * 0.75}
-                    cy={center + ax.dir.y * r * 0.75}
-                    r={3}
-                    fill={ax.color}
-                    fillOpacity={0.4}
-                    style={{ cursor: 'pointer' }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleGizmoAxisClick(ax.axis, -1);
-                    }}
-                  />
-
-                  {/* Positive Axis Pill */}
-                  <circle
-                    cx={px}
-                    cy={py}
-                    r={9}
-                    fill={ax.color}
-                    stroke="#ffffff"
-                    strokeWidth={1.5}
-                    style={{ cursor: 'pointer', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.15))' }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleGizmoAxisClick(ax.axis, 1);
-                    }}
-                  />
-                  <text
-                    x={px}
-                    y={py + 3.5}
-                    textAnchor="middle"
-                    fontSize="9"
-                    fontWeight="800"
-                    fill="#ffffff"
-                    style={{ pointerEvents: 'none', userSelect: 'none' }}
-                  >
-                    {ax.name}
-                  </text>
-                </g>
-              );
-            });
-          })()}
-        </svg>
+        <canvas
+          ref={gizmoCanvasRef}
+          width={96}
+          height={96}
+          onClick={handleGizmoCanvasClick}
+          style={{ width: 96, height: 96, cursor: 'pointer' }}
+          title="3D Orientation Gizmo (Click an axis to align view)"
+        />
       </div>
 
-      {/* Floating 3D Cursor Coordinate Tooltip (Direct DOM Updated) */}
+      {/* Floating 3D Cursor Coordinate Tooltip (Direct DOM) */}
       <div
         ref={tooltipRef}
         style={{
@@ -1923,7 +1924,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }}
       />
 
-      {/* Blender Navigation Guide Watermark (Bottom-Left) */}
+      {/* Navigation Guide Watermark (Bottom-Left) */}
       <div
         style={{
           position: 'absolute',
@@ -1943,8 +1944,8 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           border: '1px solid #e5e7eb',
         }}
       >
-        <span>&bull; MMB Drag: <strong>Orbit View</strong> &bull; Shift + MMB: <strong>Pan</strong></span>
-        <span>&bull; Wheel: <strong>Zoom</strong> &bull; Right-Click / Esc: <strong>Cancel</strong></span>
+        <span>&bull; <strong>Right-Click Drag</strong>: Rotate View &bull; <strong>Middle Drag / Shift+Right</strong>: Pan</span>
+        <span>&bull; <strong>Wheel</strong>: Zoom &bull; <strong>Right-Click Tap / Esc</strong>: Cancel</span>
         <span>&bull; Numpad 1/3/7: <strong>Views</strong> &bull; Numpad 5: <strong>Ortho/Persp</strong> &bull; F: <strong>Frame</strong></span>
         <span>&bull; Shift+Tab: <strong>Magnet Snap</strong> &bull; Hold Ctrl: <strong>Invert Snap</strong></span>
       </div>
