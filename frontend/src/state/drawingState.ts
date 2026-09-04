@@ -4,12 +4,17 @@ import {
   DrawingLine,
   DrawingArc,
   DrawingCylinder,
+  DrawingSphere,
+  EntityGroup,
+  GroupType,
   GridSettings,
   Layer,
   Point3D,
   ScreenPoint,
   ToolType,
   AppTheme,
+  Face3D,
+  SelectionMode,
 } from '../types/drawing';
 import { ViewportTransform, IsoplaneType } from '../geometry/isometric';
 import { HostPlaneInfo } from '../geometry/snapping';
@@ -27,6 +32,8 @@ interface HistorySnapshot {
   lines: DrawingLine[];
   arcs: DrawingArc[];
   cylinders: DrawingCylinder[];
+  spheres: DrawingSphere[];
+  groups: EntityGroup[];
 }
 
 const DEFAULT_LAYERS: Layer[] = [
@@ -52,11 +59,18 @@ export function useDrawingState() {
   const [lines, setLinesState] = useState<DrawingLine[]>(INITIAL_DEMO_LINES);
   const [arcs, setArcsState] = useState<DrawingArc[]>([]);
   const [cylinders, setCylindersState] = useState<DrawingCylinder[]>([]);
+  const [spheres, setSpheresState] = useState<DrawingSphere[]>([]);
+  const [groups, setGroupsState] = useState<EntityGroup[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [groupMode, setGroupMode] = useState<boolean>(true); // Transform group as one unit when grouped
+
   const [layers, setLayers] = useState<Layer[]>(DEFAULT_LAYERS);
   const [activeLayerId, setActiveLayerId] = useState<string>('layer-1');
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
   const [selectedArcId, setSelectedArcId] = useState<string | null>(null);
   const [selectedCylinderId, setSelectedCylinderId] = useState<string | null>(null);
+  const [selectedSphereId, setSelectedSphereId] = useState<string | null>(null);
+
   const [activeTool, setActiveTool] = useState<ToolType>('line');
   const [gridSettings, setGridSettingsState] = useState<GridSettings>(DEFAULT_GRID_SETTINGS);
   const [viewport, setViewportState] = useState<ViewportTransform>({
@@ -75,9 +89,10 @@ export function useDrawingState() {
   const [showOrthoPanel, setShowOrthoPanel] = useState<boolean>(true);
   const [activeElevation, setActiveElevation] = useState<number>(0);
   const [activeIsoplane, setActiveIsoplane] = useState<IsoplaneType>('top');
-  const [selectionMode, setSelectionMode] = useState<import('../types/drawing').SelectionMode>('edge');
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>('edge');
   const [selectedVertex, setSelectedVertex] = useState<Point3D | null>(null);
-  const [selectedFace, setSelectedFace] = useState<import('../types/drawing').Face3D | null>(null);
+  const [selectedFace, setSelectedFace] = useState<Face3D | null>(null);
+
   const [theme, setTheme] = useState<AppTheme>(() => {
     try {
       const saved = localStorage.getItem('drawviz_theme');
@@ -107,7 +122,6 @@ export function useDrawingState() {
   // Keyboard shortcut listener for Blender-style 1, 2, 3 modes
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing in an input or textarea
       const target = e.target as HTMLElement;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
         return;
@@ -124,109 +138,127 @@ export function useDrawingState() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // History stack for Undo/Redo (stores lines, arcs, cylinders)
+  // History stack for Undo/Redo (stores lines, arcs, cylinders, spheres, groups)
   const [undoStack, setUndoStack] = useState<HistorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<HistorySnapshot[]>([]);
 
-  const pushToHistory = useCallback((currentLines: DrawingLine[], currentArcs: DrawingArc[], currentCylinders: DrawingCylinder[] = cylinders) => {
-    setUndoStack((prev) => [...prev.slice(-30), { lines: currentLines, arcs: currentArcs, cylinders: currentCylinders }]);
-    setRedoStack([]);
-  }, [cylinders]);
+  const pushToHistory = useCallback(
+    (
+      currentLines: DrawingLine[] = lines,
+      currentArcs: DrawingArc[] = arcs,
+      currentCylinders: DrawingCylinder[] = cylinders,
+      currentSpheres: DrawingSphere[] = spheres,
+      currentGroups: EntityGroup[] = groups
+    ) => {
+      setUndoStack((prev) => [
+        ...prev.slice(-30),
+        {
+          lines: currentLines,
+          arcs: currentArcs,
+          cylinders: currentCylinders,
+          spheres: currentSpheres,
+          groups: currentGroups,
+        },
+      ]);
+      setRedoStack([]);
+    },
+    [lines, arcs, cylinders, spheres, groups]
+  );
 
   const setLines = useCallback(
     (newLines: DrawingLine[] | ((prev: DrawingLine[]) => DrawingLine[])) => {
       setLinesState((prev) => {
         const next = typeof newLines === 'function' ? newLines(prev) : newLines;
-        pushToHistory(prev, arcs, cylinders);
+        pushToHistory(prev, arcs, cylinders, spheres, groups);
         return next;
       });
     },
-    [pushToHistory, arcs, cylinders]
+    [pushToHistory, arcs, cylinders, spheres, groups]
   );
 
   const addLine = useCallback(
     (line: DrawingLine) => {
       setLinesState((prev) => {
-        pushToHistory(prev, arcs, cylinders);
+        pushToHistory(prev, arcs, cylinders, spheres, groups);
         return [...prev, line];
       });
     },
-    [pushToHistory, arcs, cylinders]
+    [pushToHistory, arcs, cylinders, spheres, groups]
   );
 
   const removeLine = useCallback(
     (id: string) => {
       setLinesState((prev) => {
-        pushToHistory(prev, arcs, cylinders);
+        pushToHistory(prev, arcs, cylinders, spheres, groups);
         return prev.filter((l) => l.id !== id);
       });
       if (selectedLineId === id) setSelectedLineId(null);
     },
-    [pushToHistory, arcs, cylinders, selectedLineId]
+    [pushToHistory, arcs, cylinders, spheres, groups, selectedLineId]
   );
 
   const setArcs = useCallback(
     (newArcs: DrawingArc[] | ((prev: DrawingArc[]) => DrawingArc[])) => {
       setArcsState((prev) => {
         const next = typeof newArcs === 'function' ? newArcs(prev) : newArcs;
-        pushToHistory(lines, prev, cylinders);
+        pushToHistory(lines, prev, cylinders, spheres, groups);
         return next;
       });
     },
-    [pushToHistory, lines, cylinders]
+    [pushToHistory, lines, cylinders, spheres, groups]
   );
 
   const addArc = useCallback(
     (arc: DrawingArc) => {
       setArcsState((prev) => {
-        pushToHistory(lines, prev, cylinders);
+        pushToHistory(lines, prev, cylinders, spheres, groups);
         return [...prev, arc];
       });
     },
-    [pushToHistory, lines, cylinders]
+    [pushToHistory, lines, cylinders, spheres, groups]
   );
 
   const removeArc = useCallback(
     (id: string) => {
       setArcsState((prev) => {
-        pushToHistory(lines, prev, cylinders);
+        pushToHistory(lines, prev, cylinders, spheres, groups);
         return prev.filter((a) => a.id !== id);
       });
       if (selectedArcId === id) setSelectedArcId(null);
     },
-    [pushToHistory, lines, cylinders, selectedArcId]
+    [pushToHistory, lines, cylinders, spheres, groups, selectedArcId]
   );
 
   const setCylinders = useCallback(
     (newCylinders: DrawingCylinder[] | ((prev: DrawingCylinder[]) => DrawingCylinder[])) => {
       setCylindersState((prev) => {
         const next = typeof newCylinders === 'function' ? newCylinders(prev) : newCylinders;
-        pushToHistory(lines, arcs, prev);
+        pushToHistory(lines, arcs, prev, spheres, groups);
         return next;
       });
     },
-    [pushToHistory, lines, arcs]
+    [pushToHistory, lines, arcs, spheres, groups]
   );
 
   const addCylinder = useCallback(
     (cylinder: DrawingCylinder) => {
       setCylindersState((prev) => {
-        pushToHistory(lines, arcs, prev);
+        pushToHistory(lines, arcs, prev, spheres, groups);
         return [...prev, cylinder];
       });
     },
-    [pushToHistory, lines, arcs]
+    [pushToHistory, lines, arcs, spheres, groups]
   );
 
   const removeCylinder = useCallback(
     (id: string) => {
       setCylindersState((prev) => {
-        pushToHistory(lines, arcs, prev);
+        pushToHistory(lines, arcs, prev, spheres, groups);
         return prev.filter((c) => c.id !== id);
       });
       if (selectedCylinderId === id) setSelectedCylinderId(null);
     },
-    [pushToHistory, lines, arcs, selectedCylinderId]
+    [pushToHistory, lines, arcs, spheres, groups, selectedCylinderId]
   );
 
   const updateArc = useCallback((arc: DrawingArc) => {
@@ -237,31 +269,337 @@ export function useDrawingState() {
     setCylindersState((prev) => prev.map((c) => (c.id === cylinder.id ? cylinder : c)));
   }, []);
 
+  // Spheres (first-class 3D solid surface entities)
+  const setSpheres = useCallback(
+    (newSpheres: DrawingSphere[] | ((prev: DrawingSphere[]) => DrawingSphere[])) => {
+      setSpheresState((prev) => {
+        const next = typeof newSpheres === 'function' ? newSpheres(prev) : newSpheres;
+        pushToHistory(lines, arcs, cylinders, prev, groups);
+        return next;
+      });
+    },
+    [pushToHistory, lines, arcs, cylinders, groups]
+  );
+
+  const addSphere = useCallback(
+    (sphere: DrawingSphere) => {
+      setSpheresState((prev) => {
+        pushToHistory(lines, arcs, cylinders, prev, groups);
+        return [...prev, sphere];
+      });
+    },
+    [pushToHistory, lines, arcs, cylinders, groups]
+  );
+
+  const removeSphere = useCallback(
+    (id: string) => {
+      setSpheresState((prev) => {
+        pushToHistory(lines, arcs, cylinders, prev, groups);
+        return prev.filter((s) => s.id !== id);
+      });
+      if (selectedSphereId === id) setSelectedSphereId(null);
+    },
+    [pushToHistory, lines, arcs, cylinders, groups, selectedSphereId]
+  );
+
+  const updateSphere = useCallback((sphere: DrawingSphere) => {
+    setSpheresState((prev) => prev.map((s) => (s.id === sphere.id ? sphere : s)));
+  }, []);
+
+  // Group Management (Planes with Planes, Edges with Edges, Vertices with Vertices)
+  const createGroup = useCallback(
+    (name: string, type: GroupType, memberIds: string[]): string => {
+      const newGroupId = `group-${type}-${Date.now()}`;
+      const newGroup: EntityGroup = {
+        id: newGroupId,
+        name,
+        type,
+        memberIds,
+      };
+
+      pushToHistory(lines, arcs, cylinders, spheres, groups);
+
+      setGroupsState((prev) => [...prev, newGroup]);
+
+      // Tag members with groupId
+      setLinesState((prev) =>
+        prev.map((l) => (memberIds.includes(l.id) ? { ...l, groupId: newGroupId } : l))
+      );
+      setArcsState((prev) =>
+        prev.map((a) => (memberIds.includes(a.id) ? { ...a, groupId: newGroupId } : a))
+      );
+      setCylindersState((prev) =>
+        prev.map((c) => (memberIds.includes(c.id) ? { ...c, groupId: newGroupId } : c))
+      );
+      setSpheresState((prev) =>
+        prev.map((s) => (memberIds.includes(s.id) ? { ...s, groupId: newGroupId } : s))
+      );
+
+      setSelectedGroupId(newGroupId);
+      return newGroupId;
+    },
+    [lines, arcs, cylinders, spheres, groups, pushToHistory]
+  );
+
+  const ungroup = useCallback(
+    (groupId: string) => {
+      pushToHistory(lines, arcs, cylinders, spheres, groups);
+
+      setGroupsState((prev) => prev.filter((g) => g.id !== groupId));
+
+      setLinesState((prev) =>
+        prev.map((l) => (l.groupId === groupId ? { ...l, groupId: undefined } : l))
+      );
+      setArcsState((prev) =>
+        prev.map((a) => (a.groupId === groupId ? { ...a, groupId: undefined } : a))
+      );
+      setCylindersState((prev) =>
+        prev.map((c) => (c.groupId === groupId ? { ...c, groupId: undefined } : c))
+      );
+      setSpheresState((prev) =>
+        prev.map((s) => (s.groupId === groupId ? { ...s, groupId: undefined } : s))
+      );
+
+      if (selectedGroupId === groupId) setSelectedGroupId(null);
+    },
+    [lines, arcs, cylinders, spheres, groups, selectedGroupId, pushToHistory]
+  );
+
+  // Realtime Live Translation & Transform Action
+  const translateEntity = useCallback(
+    (
+      type: 'vertex' | 'line' | 'arc' | 'cylinder' | 'sphere' | 'face' | 'group',
+      idOrData: any,
+      delta: Point3D
+    ) => {
+      if (delta.x === 0 && delta.y === 0 && delta.z === 0) return;
+
+      // Group Translation: Move all members of a group together
+      const targetGroupId =
+        type === 'group'
+          ? (idOrData as string)
+          : groupMode && typeof idOrData === 'string'
+          ? (lines.find((l) => l.id === idOrData)?.groupId ||
+             arcs.find((a) => a.id === idOrData)?.groupId ||
+             cylinders.find((c) => c.id === idOrData)?.groupId ||
+             spheres.find((s) => s.id === idOrData)?.groupId)
+          : groupMode && type === 'face' && idOrData
+          ? ((idOrData as Face3D).groupId || groups.find((g) => g.type === 'plane' && g.memberIds.includes((idOrData as Face3D).id))?.id)
+          : null;
+
+      if (targetGroupId) {
+        setLinesState((prev) =>
+          prev.map((l) =>
+            l.groupId === targetGroupId
+              ? {
+                  ...l,
+                  start: { x: l.start.x + delta.x, y: l.start.y + delta.y, z: (l.start.z || 0) + delta.z },
+                  end: { x: l.end.x + delta.x, y: l.end.y + delta.y, z: (l.end.z || 0) + delta.z },
+                }
+              : l
+          )
+        );
+        setArcsState((prev) =>
+          prev.map((a) =>
+            a.groupId === targetGroupId
+              ? {
+                  ...a,
+                  center: { x: a.center.x + delta.x, y: a.center.y + delta.y, z: (a.center.z || 0) + delta.z },
+                  startPoint: a.startPoint
+                    ? { x: a.startPoint.x + delta.x, y: a.startPoint.y + delta.y, z: (a.startPoint.z || 0) + delta.z }
+                    : undefined,
+                  endPoint: a.endPoint
+                    ? { x: a.endPoint.x + delta.x, y: a.endPoint.y + delta.y, z: (a.endPoint.z || 0) + delta.z }
+                    : undefined,
+                }
+              : a
+          )
+        );
+        setCylindersState((prev) =>
+          prev.map((c) =>
+            c.groupId === targetGroupId
+              ? { ...c, center: { x: c.center.x + delta.x, y: c.center.y + delta.y, z: (c.center.z || 0) + delta.z } }
+              : c
+          )
+        );
+        setSpheresState((prev) =>
+          prev.map((s) =>
+            s.groupId === targetGroupId
+              ? { ...s, center: { x: s.center.x + delta.x, y: s.center.y + delta.y, z: (s.center.z || 0) + delta.z } }
+              : s
+          )
+        );
+        return;
+      }
+
+      if (type === 'vertex') {
+        const targetPt = idOrData as Point3D;
+        const matchesPt = (p: Point3D) => p.x === targetPt.x && p.y === targetPt.y && (p.z || 0) === (targetPt.z || 0);
+
+        setLinesState((prev) =>
+          prev.map((l) => {
+            const startMatch = matchesPt(l.start);
+            const endMatch = matchesPt(l.end);
+            if (!startMatch && !endMatch) return l;
+            return {
+              ...l,
+              start: startMatch
+                ? { x: l.start.x + delta.x, y: l.start.y + delta.y, z: (l.start.z || 0) + delta.z }
+                : l.start,
+              end: endMatch
+                ? { x: l.end.x + delta.x, y: l.end.y + delta.y, z: (l.end.z || 0) + delta.z }
+                : l.end,
+            };
+          })
+        );
+        setArcsState((prev) =>
+          prev.map((a) => {
+            const p1Match = a.startPoint && matchesPt(a.startPoint);
+            const p2Match = a.endPoint && matchesPt(a.endPoint);
+            if (!p1Match && !p2Match) return a;
+            return {
+              ...a,
+              startPoint: p1Match
+                ? { x: a.startPoint!.x + delta.x, y: a.startPoint!.y + delta.y, z: (a.startPoint!.z || 0) + delta.z }
+                : a.startPoint,
+              endPoint: p2Match
+                ? { x: a.endPoint!.x + delta.x, y: a.endPoint!.y + delta.y, z: (a.endPoint!.z || 0) + delta.z }
+                : a.endPoint,
+            };
+          })
+        );
+        setSelectedVertex({
+          x: targetPt.x + delta.x,
+          y: targetPt.y + delta.y,
+          z: (targetPt.z || 0) + delta.z,
+        });
+      } else if (type === 'line') {
+        const lineId = idOrData as string;
+        setLinesState((prev) =>
+          prev.map((l) =>
+            l.id === lineId
+              ? {
+                  ...l,
+                  start: { x: l.start.x + delta.x, y: l.start.y + delta.y, z: (l.start.z || 0) + delta.z },
+                  end: { x: l.end.x + delta.x, y: l.end.y + delta.y, z: (l.end.z || 0) + delta.z },
+                }
+              : l
+          )
+        );
+      } else if (type === 'arc') {
+        const arcId = idOrData as string;
+        setArcsState((prev) =>
+          prev.map((a) =>
+            a.id === arcId
+              ? {
+                  ...a,
+                  center: { x: a.center.x + delta.x, y: a.center.y + delta.y, z: (a.center.z || 0) + delta.z },
+                  startPoint: a.startPoint
+                    ? { x: a.startPoint.x + delta.x, y: a.startPoint.y + delta.y, z: (a.startPoint.z || 0) + delta.z }
+                    : undefined,
+                  endPoint: a.endPoint
+                    ? { x: a.endPoint.x + delta.x, y: a.endPoint.y + delta.y, z: (a.endPoint.z || 0) + delta.z }
+                    : undefined,
+                }
+              : a
+          )
+        );
+      } else if (type === 'cylinder') {
+        const cylId = idOrData as string;
+        setCylindersState((prev) =>
+          prev.map((c) =>
+            c.id === cylId
+              ? { ...c, center: { x: c.center.x + delta.x, y: c.center.y + delta.y, z: (c.center.z || 0) + delta.z } }
+              : c
+          )
+        );
+      } else if (type === 'sphere') {
+        const sphId = idOrData as string;
+        setSpheresState((prev) =>
+          prev.map((s) =>
+            s.id === sphId
+              ? { ...s, center: { x: s.center.x + delta.x, y: s.center.y + delta.y, z: (s.center.z || 0) + delta.z } }
+              : s
+          )
+        );
+      } else if (type === 'face') {
+        const face = idOrData as Face3D;
+        const faceVertices = face.vertices;
+        const matchesFaceVertex = (p: Point3D) =>
+          faceVertices.some((fv) => fv.x === p.x && fv.y === p.y && (fv.z || 0) === (p.z || 0));
+
+        setLinesState((prev) =>
+          prev.map((l) => {
+            const startInFace = matchesFaceVertex(l.start);
+            const endInFace = matchesFaceVertex(l.end);
+            if (!startInFace && !endInFace) return l;
+            return {
+              ...l,
+              start: startInFace
+                ? { x: l.start.x + delta.x, y: l.start.y + delta.y, z: (l.start.z || 0) + delta.z }
+                : l.start,
+              end: endInFace
+                ? { x: l.end.x + delta.x, y: l.end.y + delta.y, z: (l.end.z || 0) + delta.z }
+                : l.end,
+            };
+          })
+        );
+        setSelectedFace({
+          ...face,
+          center: { x: face.center.x + delta.x, y: face.center.y + delta.y, z: face.center.z + delta.z },
+          vertices: face.vertices.map((v) => ({ x: v.x + delta.x, y: v.y + delta.y, z: (v.z || 0) + delta.z })),
+          elevation: face.elevation + (face.plane === 'top' ? delta.z : face.plane === 'front' ? delta.y : delta.x),
+        });
+      }
+    },
+    [groupMode, lines, arcs, cylinders, spheres]
+  );
+
+  const commitTransform = useCallback(() => {
+    pushToHistory(lines, arcs, cylinders, spheres, groups);
+  }, [lines, arcs, cylinders, spheres, groups, pushToHistory]);
+
   const undo = useCallback(() => {
     if (undoStack.length === 0) return;
     const previous = undoStack[undoStack.length - 1];
     setUndoStack((prev) => prev.slice(0, -1));
-    setRedoStack((prev) => [...prev, { lines, arcs, cylinders }]);
+    setRedoStack((prev) => [
+      ...prev,
+      { lines, arcs, cylinders, spheres, groups },
+    ]);
     setLinesState(previous.lines);
     setArcsState(previous.arcs);
     setCylindersState(previous.cylinders || []);
+    setSpheresState(previous.spheres || []);
+    setGroupsState(previous.groups || []);
     setSelectedLineId(null);
     setSelectedArcId(null);
     setSelectedCylinderId(null);
-  }, [undoStack, lines, arcs, cylinders]);
+    setSelectedSphereId(null);
+    setSelectedVertex(null);
+    setSelectedFace(null);
+  }, [undoStack, lines, arcs, cylinders, spheres, groups]);
 
   const redo = useCallback(() => {
     if (redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1];
     setRedoStack((prev) => prev.slice(0, -1));
-    setUndoStack((prev) => [...prev, { lines, arcs, cylinders }]);
+    setUndoStack((prev) => [
+      ...prev,
+      { lines, arcs, cylinders, spheres, groups },
+    ]);
     setLinesState(next.lines);
     setArcsState(next.arcs);
     setCylindersState(next.cylinders || []);
+    setSpheresState(next.spheres || []);
+    setGroupsState(next.groups || []);
     setSelectedLineId(null);
     setSelectedArcId(null);
     setSelectedCylinderId(null);
-  }, [redoStack, lines, arcs, cylinders]);
+    setSelectedSphereId(null);
+    setSelectedVertex(null);
+    setSelectedFace(null);
+  }, [redoStack, lines, arcs, cylinders, spheres, groups]);
 
   const setViewport = useCallback((updates: Partial<ViewportTransform>) => {
     setViewportState((prev) => ({ ...prev, ...updates }));
@@ -272,15 +610,20 @@ export function useDrawingState() {
   }, []);
 
   const resetCanvas = useCallback(() => {
-    pushToHistory(lines, arcs, cylinders);
+    pushToHistory(lines, arcs, cylinders, spheres, groups);
     setLinesState([]);
     setArcsState([]);
     setCylindersState([]);
+    setSpheresState([]);
+    setGroupsState([]);
     setSelectedLineId(null);
     setSelectedArcId(null);
     setSelectedCylinderId(null);
+    setSelectedSphereId(null);
+    setSelectedVertex(null);
+    setSelectedFace(null);
     setActiveAnchor(null);
-  }, [lines, arcs, cylinders, pushToHistory]);
+  }, [lines, arcs, cylinders, spheres, groups, pushToHistory]);
 
   const addLayer = useCallback(() => {
     const newId = `layer-${layers.length + 1}`;
@@ -307,6 +650,8 @@ export function useDrawingState() {
       setLayers((prev) => prev.filter((ly) => ly.id !== layerId));
       setLinesState((prev) => prev.filter((l) => l.layerId !== layerId));
       setArcsState((prev) => prev.filter((a) => a.layerId !== layerId));
+      setCylindersState((prev) => prev.filter((c) => c.layerId !== layerId));
+      setSpheresState((prev) => prev.filter((s) => s.layerId !== layerId));
       if (activeLayerId === layerId) {
         const remaining = layers.filter((ly) => ly.id !== layerId);
         setActiveLayerId(remaining[0].id);
@@ -316,6 +661,9 @@ export function useDrawingState() {
   );
 
   const selectedLine = lines.find((l) => l.id === selectedLineId) || null;
+  const selectedSphere = spheres.find((s) => s.id === selectedSphereId) || null;
+  const selectedCylinder = cylinders.find((c) => c.id === selectedCylinderId) || null;
+  const selectedArc = arcs.find((a) => a.id === selectedArcId) || null;
   const activeLesson = CURRICULUM.find((l) => l.id === activeLessonId) || null;
 
   return {
@@ -356,7 +704,7 @@ export function useDrawingState() {
     removeArc,
     selectedArcId,
     setSelectedArcId,
-    selectedArc: arcs.find((a) => a.id === selectedArcId) || null,
+    selectedArc,
     cylinders,
     setCylindersState,
     setCylinders,
@@ -365,7 +713,25 @@ export function useDrawingState() {
     removeCylinder,
     selectedCylinderId,
     setSelectedCylinderId,
-    selectedCylinder: cylinders.find((c) => c.id === selectedCylinderId) || null,
+    selectedCylinder,
+    spheres,
+    setSpheresState,
+    setSpheres,
+    addSphere,
+    updateSphere,
+    removeSphere,
+    selectedSphereId,
+    setSelectedSphereId,
+    selectedSphere,
+    groups,
+    selectedGroupId,
+    setSelectedGroupId,
+    groupMode,
+    setGroupMode,
+    createGroup,
+    ungroup,
+    translateEntity,
+    commitTransform,
     showOrthoPanel,
     setShowOrthoPanel,
     undo,

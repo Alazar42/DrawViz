@@ -22,6 +22,7 @@ export interface DrawingLine {
   start: Point3D;
   end: Point3D;
   layerId: string;
+  groupId?: string;
   style?: LineStyle;
 }
 
@@ -41,6 +42,7 @@ export interface DrawingArc {
   endPoint?: Point3D;   // endpoint 2 for two-vertex arc
   bulgeDir?: ArcBulgeDirection; // bulge orientation (+z, -z, +y, -y, +x, -x)
   layerId: string;
+  groupId?: string;
   style?: LineStyle;
 }
 
@@ -51,7 +53,26 @@ export interface DrawingCylinder {
   height: number;  // height along normal
   normal: Point3D; // cylinder axis normal
   layerId: string;
+  groupId?: string;
   style?: LineStyle;
+}
+
+export interface DrawingSphere {
+  id: string;
+  center: Point3D;
+  radius: number;
+  layerId: string;
+  groupId?: string;
+  style?: LineStyle;
+}
+
+export type GroupType = 'plane' | 'edge' | 'vertex' | 'mesh';
+
+export interface EntityGroup {
+  id: string;
+  name: string;
+  type: GroupType;
+  memberIds: string[];
 }
 
 export interface Layer {
@@ -87,6 +108,8 @@ export interface DrawVizProject {
   lines: DrawingLine[];
   arcs?: DrawingArc[];
   cylinders?: DrawingCylinder[];
+  spheres?: DrawingSphere[];
+  groups?: EntityGroup[];
   activeLessonId?: string;
 }
 
@@ -102,6 +125,7 @@ export interface Face3D {
   vertices: Point3D[];
   plane: IsoplanePlane;
   elevation: number;
+  groupId?: string;
 }
 
 export interface LessonObjective {

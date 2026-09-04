@@ -1,10 +1,13 @@
 import React, { useRef, useEffect, useState, useCallback, memo } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import {
   DrawingLine,
   DrawingArc,
   DrawingCylinder,
+  DrawingSphere,
+  EntityGroup,
   Point3D,
   ScreenPoint,
   ToolType,
@@ -56,10 +59,12 @@ interface Three3DCanvasProps {
   lines: DrawingLine[];
   arcs?: DrawingArc[];
   cylinders?: DrawingCylinder[];
+  spheres?: DrawingSphere[];
   activeLayerId: string;
   selectedLineId: string | null;
   selectedArcId?: string | null;
   selectedCylinderId?: string | null;
+  selectedSphereId?: string | null;
   selectedVertex?: Point3D | null;
   selectedFace?: Face3D | null;
   selectionMode?: SelectionMode;
@@ -72,17 +77,21 @@ interface Three3DCanvasProps {
   onSelectLine: (id: string | null) => void;
   onSelectArc?: (id: string | null) => void;
   onSelectCylinder?: (id: string | null) => void;
+  onSelectSphere?: (id: string | null) => void;
   onSelectVertex?: (pt: Point3D | null) => void;
   onSelectFace?: (face: Face3D | null) => void;
   onSetSelectionMode?: (mode: SelectionMode) => void;
   onAddLine: (line: DrawingLine) => void;
   onAddArc?: (arc: DrawingArc) => void;
   onAddCylinder?: (cylinder: DrawingCylinder) => void;
+  onAddSphere?: (sphere: DrawingSphere) => void;
   onUpdateArc?: (arc: DrawingArc) => void;
   onUpdateCylinder?: (cylinder: DrawingCylinder) => void;
+  onUpdateSphere?: (sphere: DrawingSphere) => void;
   onRemoveLine: (id: string) => void;
   onRemoveArc?: (id: string) => void;
   onRemoveCylinder?: (id: string) => void;
+  onRemoveSphere?: (id: string) => void;
   onSetAnchor: (anchor: Point3D | null) => void;
   onCursorUpdate?: (state: CursorState) => void;
   onSetElevation?: (elevation: number) => void;
@@ -91,6 +100,14 @@ interface Three3DCanvasProps {
   onToggleTheme?: () => void;
   onSetTheme?: (theme: AppTheme) => void;
   onOpenSettings?: () => void;
+  onTranslateEntity?: (
+    type: 'vertex' | 'line' | 'arc' | 'cylinder' | 'sphere' | 'face' | 'group',
+    idOrData: any,
+    delta: Point3D
+  ) => void;
+  onCommitTransform?: () => void;
+  groupMode?: boolean;
+  groups?: EntityGroup[];
 }
 
 // Reusable math objects for zero garbage collection
@@ -125,10 +142,12 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   lines,
   arcs = [],
   cylinders = [],
+  spheres = [],
   activeLayerId,
   selectedLineId,
   selectedArcId = null,
   selectedCylinderId = null,
+  selectedSphereId = null,
   selectedVertex = null,
   selectedFace = null,
   selectionMode = 'edge',
@@ -141,17 +160,21 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   onSelectLine,
   onSelectArc,
   onSelectCylinder,
+  onSelectSphere,
   onSelectVertex,
   onSelectFace,
   onSetSelectionMode,
   onAddLine,
   onAddArc,
   onAddCylinder,
+  onAddSphere,
   onUpdateArc,
   onUpdateCylinder,
+  onUpdateSphere,
   onRemoveLine,
   onRemoveArc,
   onRemoveCylinder,
+  onRemoveSphere,
   onSetAnchor,
   onCursorUpdate,
   onSetElevation,
@@ -160,6 +183,10 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   onToggleTheme,
   onSetTheme,
   onOpenSettings,
+  onTranslateEntity,
+  onCommitTransform,
+  groupMode = true,
+  groups = [],
 }) => {
   const isDark = theme === 'dark';
   const mountRef = useRef<HTMLDivElement>(null);
@@ -170,6 +197,31 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   const activeCameraRef = useRef<THREE.Camera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const gizmoCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // 3D Transform Gizmo Pivot Mesh & Controls
+  const pivotMeshRef = useRef<THREE.Mesh>(
+    new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ visible: false }))
+  );
+  const transformControlsRef = useRef<TransformControls | null>(null);
+
+  // Selection & Callback Refs for 1:1 zero-lag gizmo interaction
+  const selectedVertexRef = useRef(selectedVertex);
+  selectedVertexRef.current = selectedVertex;
+  const selectedLineIdRef = useRef(selectedLineId);
+  selectedLineIdRef.current = selectedLineId;
+  const selectedArcIdRef = useRef(selectedArcId);
+  selectedArcIdRef.current = selectedArcId;
+  const selectedCylinderIdRef = useRef(selectedCylinderId);
+  selectedCylinderIdRef.current = selectedCylinderId;
+  const selectedSphereIdRef = useRef(selectedSphereId);
+  selectedSphereIdRef.current = selectedSphereId;
+  const selectedFaceRef = useRef(selectedFace);
+  selectedFaceRef.current = selectedFace;
+
+  const onTranslateEntityRef = useRef(onTranslateEntity);
+  onTranslateEntityRef.current = onTranslateEntity;
+  const onCommitTransformRef = useRef(onCommitTransform);
+  onCommitTransformRef.current = onCommitTransform;
 
   // Dynamic 3D Scene Groups
   const geometryGroupRef = useRef<THREE.Group>(new THREE.Group());
@@ -227,6 +279,8 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     lineId?: string | null;
     arcId?: string | null;
     faceData?: Face3D | null;
+    sphereData?: DrawingSphere | null;
+    cylinderData?: DrawingCylinder | null;
   } | null>(null);
 
   // Normal alignment for circles, half arcs, and cylinders on inclined planes
@@ -543,6 +597,70 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       requestRender();
     });
 
+    // 3D Transform Gizmo (Blender style X, Y, Z translation)
+    scene.add(pivotMeshRef.current);
+    const transformControls = new TransformControls(orthoCam, renderer.domElement);
+    transformControls.setMode('translate');
+    transformControls.setSpace('world');
+    transformControls.size = 0.85;
+    transformControls.translationSnap = 1;
+
+    transformControls.addEventListener('dragging-changed', (event: any) => {
+      if (controlsRef.current) {
+        controlsRef.current.enabled = !event.value;
+      }
+      if (!event.value) {
+        onCommitTransformRef.current?.();
+      }
+    });
+
+    const dragStartPos = new THREE.Vector3();
+    transformControls.addEventListener('mouseDown', () => {
+      dragStartPos.copy(pivotMeshRef.current.position);
+    });
+
+    transformControls.addEventListener('objectChange', () => {
+      const curPos = pivotMeshRef.current.position;
+      const dx = Math.round(curPos.x - dragStartPos.x);
+      const dz = Math.round(curPos.y - dragStartPos.y); // Height
+      const dy = Math.round(curPos.z - dragStartPos.z); // Depth
+
+      if (dx !== 0 || dy !== 0 || dz !== 0) {
+        const delta: Point3D = { x: dx, y: dy, z: dz };
+        const selV = selectedVertexRef.current;
+        const selL = selectedLineIdRef.current;
+        const selA = selectedArcIdRef.current;
+        const selC = selectedCylinderIdRef.current;
+        const selS = selectedSphereIdRef.current;
+        const selF = selectedFaceRef.current;
+
+        if (selV) {
+          onTranslateEntityRef.current?.('vertex', selV, delta);
+        } else if (selL) {
+          onTranslateEntityRef.current?.('line', selL, delta);
+        } else if (selA) {
+          onTranslateEntityRef.current?.('arc', selA, delta);
+        } else if (selC) {
+          onTranslateEntityRef.current?.('cylinder', selC, delta);
+        } else if (selS) {
+          onTranslateEntityRef.current?.('sphere', selS, delta);
+        } else if (selF) {
+          onTranslateEntityRef.current?.('face', selF, delta);
+        }
+
+        dragStartPos.set(
+          dragStartPos.x + dx,
+          dragStartPos.y + dz,
+          dragStartPos.z + dy
+        );
+        requestRender();
+      }
+    });
+
+    const gizmoRoot = (transformControls as any).getHelper ? (transformControls as any).getHelper() : transformControls;
+    scene.add(gizmoRoot);
+    transformControlsRef.current = transformControls;
+
     requestRender();
 
     // Resize Handler
@@ -573,6 +691,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     return () => {
       resizeObserver.disconnect();
       controls.dispose();
+      transformControls.dispose();
       renderer.dispose();
     };
   }, [requestRender]);
@@ -626,6 +745,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         onSelectLine(null);
         onSelectArc?.(null);
         onSelectCylinder?.(null);
+        onSelectSphere?.(null);
         onSelectVertex?.(null);
         onSelectFace?.(null);
         requestRender();
@@ -633,6 +753,13 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         e.key === 'Delete' ||
         e.key === 'Backspace'
       ) {
+        if (selectedSphereId) {
+          e.preventDefault();
+          onRemoveSphere?.(selectedSphereId);
+          onSelectSphere?.(null);
+          requestRender();
+          return;
+        }
         if (selectedCylinderId) {
           e.preventDefault();
           onRemoveCylinder?.(selectedCylinderId);
@@ -759,12 +886,18 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       perspCam.up.copy(orthoCam.up);
       activeCameraRef.current = perspCam;
       controls.object = perspCam;
+      if (transformControlsRef.current) {
+        transformControlsRef.current.camera = perspCam;
+      }
     } else {
       orthoCam.position.copy(perspCam.position);
       orthoCam.rotation.copy(perspCam.rotation);
       orthoCam.up.copy(perspCam.up);
       activeCameraRef.current = orthoCam;
       controls.object = orthoCam;
+      if (transformControlsRef.current) {
+        transformControlsRef.current.camera = orthoCam;
+      }
     }
 
     controls.update();
@@ -993,6 +1126,64 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
     });
 
+    // 3D Solid Spheres with shaded faces & technical contour rings
+    spheres.forEach((sph) => {
+      const centerThree = logicalToThree(sph.center);
+
+      // Solid shaded sphere surface
+      if (solidShading) {
+        const sphGeo = new THREE.SphereGeometry(sph.radius, 28, 20);
+        const sphMesh = new THREE.Mesh(sphGeo, baseFaceMat);
+        sphMesh.position.copy(centerThree);
+        (sphMesh as any).userData = { sphereData: sph };
+        faceGroup.add(sphMesh);
+      }
+
+      // 3 Technical Drawing Orthogonal Wireframe Rings
+      const ringSegs = 48;
+      // Ring 1: Equator (XZ plane in Three.js -> XY in logical)
+      const r1Pts: THREE.Vector3[] = [];
+      for (let i = 0; i <= ringSegs; i++) {
+        const theta = (i / ringSegs) * Math.PI * 2;
+        r1Pts.push(
+          new THREE.Vector3(
+            centerThree.x + sph.radius * Math.cos(theta),
+            centerThree.y,
+            centerThree.z + sph.radius * Math.sin(theta)
+          )
+        );
+      }
+      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(r1Pts), baseLineMat));
+
+      // Ring 2: Vertical Ring (XY plane in Three.js -> XZ in logical)
+      const r2Pts: THREE.Vector3[] = [];
+      for (let i = 0; i <= ringSegs; i++) {
+        const theta = (i / ringSegs) * Math.PI * 2;
+        r2Pts.push(
+          new THREE.Vector3(
+            centerThree.x + sph.radius * Math.cos(theta),
+            centerThree.y + sph.radius * Math.sin(theta),
+            centerThree.z
+          )
+        );
+      }
+      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(r2Pts), baseLineMat));
+
+      // Ring 3: Vertical Ring (YZ plane in Three.js -> YZ in logical)
+      const r3Pts: THREE.Vector3[] = [];
+      for (let i = 0; i <= ringSegs; i++) {
+        const theta = (i / ringSegs) * Math.PI * 2;
+        r3Pts.push(
+          new THREE.Vector3(
+            centerThree.x,
+            centerThree.y + sph.radius * Math.sin(theta),
+            centerThree.z + sph.radius * Math.cos(theta)
+          )
+        );
+      }
+      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(r3Pts), baseLineMat));
+    });
+
     const extracted = extractFacesFromLines(lines, arcs);
     extractedFacesRef.current = extracted;
 
@@ -1043,7 +1234,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     });
 
     requestRender();
-  }, [lines, arcs, cylinders, selectionMode, solidShading, theme, requestRender]);
+  }, [lines, arcs, cylinders, spheres, selectionMode, solidShading, theme, requestRender]);
 
   // Update scene background on theme change
   useEffect(() => {
@@ -1119,6 +1310,24 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
     }
 
+    if (selectedSphereId) {
+      const sph = spheres.find((s) => s.id === selectedSphereId);
+      if (sph) {
+        const centerThree = logicalToThree(sph.center);
+        const haloGeo = new THREE.SphereGeometry(sph.radius * 1.02, 24, 16);
+        const haloMat = new THREE.MeshBasicMaterial({
+          color: 0x4f46e5,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.8,
+          depthTest: false,
+        });
+        const halo = new THREE.Mesh(haloGeo, haloMat);
+        halo.position.copy(centerThree);
+        selGroup.add(halo);
+      }
+    }
+
     if (selectedVertex) {
       const v = logicalToThree(selectedVertex);
       const selGeo = new THREE.SphereGeometry(0.28, 14, 14);
@@ -1163,7 +1372,82 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     }
 
     requestRender();
-  }, [selectedLineId, selectedArcId, selectedCylinderId, selectedVertex, selectedFace, lines, arcs, cylinders, requestRender]);
+  }, [selectedLineId, selectedArcId, selectedCylinderId, selectedSphereId, selectedVertex, selectedFace, lines, arcs, cylinders, spheres, requestRender]);
+
+  // -------------------------------------------------------------
+  // 7. Update TransformControls Pivot & Attachment (Blender Gizmo)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const tc = transformControlsRef.current;
+    const pivot = pivotMeshRef.current;
+    if (!tc || !pivot) return;
+
+    if (activeAnchor) {
+      tc.detach();
+      return;
+    }
+
+    if (selectedVertex) {
+      pivot.position.copy(logicalToThree(selectedVertex));
+      tc.attach(pivot);
+    } else if (selectedLineId) {
+      const line = lines.find((l) => l.id === selectedLineId);
+      if (line) {
+        const midLogical: Point3D = {
+          x: Math.round((line.start.x + line.end.x) / 2),
+          y: Math.round((line.start.y + line.end.y) / 2),
+          z: Math.round(((line.start.z || 0) + (line.end.z || 0)) / 2),
+        };
+        pivot.position.copy(logicalToThree(midLogical));
+        tc.attach(pivot);
+      } else {
+        tc.detach();
+      }
+    } else if (selectedArcId) {
+      const arc = arcs.find((a) => a.id === selectedArcId);
+      if (arc) {
+        pivot.position.copy(logicalToThree(arc.center));
+        tc.attach(pivot);
+      } else {
+        tc.detach();
+      }
+    } else if (selectedCylinderId) {
+      const cyl = cylinders.find((c) => c.id === selectedCylinderId);
+      if (cyl) {
+        pivot.position.copy(logicalToThree(cyl.center));
+        tc.attach(pivot);
+      } else {
+        tc.detach();
+      }
+    } else if (selectedSphereId) {
+      const sph = spheres.find((s) => s.id === selectedSphereId);
+      if (sph) {
+        pivot.position.copy(logicalToThree(sph.center));
+        tc.attach(pivot);
+      } else {
+        tc.detach();
+      }
+    } else if (selectedFace) {
+      pivot.position.copy(logicalToThree(selectedFace.center));
+      tc.attach(pivot);
+    } else {
+      tc.detach();
+    }
+    requestRender();
+  }, [
+    selectedVertex,
+    selectedLineId,
+    selectedArcId,
+    selectedCylinderId,
+    selectedSphereId,
+    selectedFace,
+    activeAnchor,
+    lines,
+    arcs,
+    cylinders,
+    spheres,
+    requestRender,
+  ]);
 
   // -------------------------------------------------------------
   // 7. Blender Snapping Calculations (Optimized: 0 Object Allocations!)
@@ -1480,12 +1764,14 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
             if (isSelectOrErase || (isFaceInFront && (activeElevation === 0 || isNearElevation))) {
               const faceData = (hit.object as any).userData?.faceData as Face3D | undefined;
               const cylData = (hit.object as any).userData?.cylinderData as DrawingCylinder | undefined;
+              const sphereData = (hit.object as any).userData?.sphereData as DrawingSphere | undefined;
               return {
                 logical: hitLogical,
                 screen: mouseScreen,
                 type: 'face' as const,
                 faceData,
                 cylinderData: cylData,
+                sphereData,
               };
             }
           }
@@ -1979,7 +2265,22 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     const hlGroup = hoverGroupRef.current;
     hlGroup.clear();
 
-    if (snap.type === 'face' && snap.faceData && selectionMode === 'face') {
+    if (snap.type === 'face' && snap.sphereData) {
+      const centerThree = logicalToThree(snap.sphereData.center);
+      const sphGeo = new THREE.SphereGeometry(snap.sphereData.radius * 1.01, 24, 16);
+      const sphHl = new THREE.Mesh(
+        sphGeo,
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.5,
+          depthTest: false,
+        })
+      );
+      sphHl.position.copy(centerThree);
+      hlGroup.add(sphHl);
+    } else if (snap.type === 'face' && snap.faceData && selectionMode === 'face') {
       const v = snap.faceData.vertices.map(logicalToThree);
       const faceGeo = new THREE.BufferGeometry();
       if (v.length === 3) {
@@ -2272,25 +2573,47 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           onSelectLine(null);
           onSelectArc?.(null);
           onSelectCylinder?.(null);
+          onSelectSphere?.(null);
           onSelectFace?.(null);
         } else {
           onSelectVertex?.(null);
         }
       } else if (selectionMode === 'face') {
-        if (snap.type === 'face' && snap.faceData) {
-          onSelectFace?.(snap.faceData);
-          onSelectLine(null);
-          onSelectArc?.(null);
-          onSelectCylinder?.(null);
-          onSelectVertex?.(null);
+        if (snap.type === 'face') {
+          if (snap.sphereData) {
+            if (activeTool === 'select') {
+              onSelectSphere?.(snap.sphereData.id);
+              onSelectFace?.(null);
+              onSelectLine(null);
+              onSelectArc?.(null);
+              onSelectCylinder?.(null);
+              onSelectVertex?.(null);
+            } else if (activeTool === 'eraser') {
+              onRemoveSphere?.(snap.sphereData.id);
+            }
+          } else if (snap.faceData) {
+            if (activeTool === 'select') {
+              onSelectFace?.(snap.faceData);
+              onSelectSphere?.(null);
+              onSelectLine(null);
+              onSelectArc?.(null);
+              onSelectCylinder?.(null);
+              onSelectVertex?.(null);
+            }
+          } else {
+            onSelectFace?.(null);
+            onSelectSphere?.(null);
+          }
         } else {
           onSelectFace?.(null);
+          onSelectSphere?.(null);
         }
       } else {
         // selectionMode === 'edge' (or default edge selection)
         let hitLineId = (snap.type === 'edge' ? snap.lineId : null) || null;
         let hitArcId = (snap.type === 'edge' ? snap.arcId : null) || null;
         let hitCylinderId: string | null = null;
+        let hitSphereId: string | null = snap.sphereData ? snap.sphereData.id : null;
 
         // Fallback: If not snapped directly to an edge, perform a screen-space distance search
         // against all lines and arcs with a generous 16px radius around click!
@@ -2378,16 +2701,28 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           });
         }
 
+        if (!hitLineId && !hitArcId && !hitCylinderId && !hitSphereId) {
+          spheres.forEach((sph) => {
+            const cThree = logicalToThree(sph.center);
+            const clickThree = logicalToThree(snap.logical);
+            if (clickThree.distanceTo(cThree) <= sph.radius + 0.5) {
+              hitSphereId = sph.id;
+            }
+          });
+        }
+
         if (activeTool === 'select') {
           onSelectLine(hitLineId);
           onSelectArc?.(hitArcId);
           onSelectCylinder?.(hitCylinderId);
+          onSelectSphere?.(hitSphereId);
           onSelectVertex?.(null);
           onSelectFace?.(null);
         } else if (activeTool === 'eraser') {
           if (hitLineId) onRemoveLine(hitLineId);
           if (hitArcId) onRemoveArc?.(hitArcId);
           if (hitCylinderId) onRemoveCylinder?.(hitCylinderId);
+          if (hitSphereId) onRemoveSphere?.(hitSphereId);
         }
       }
     }
@@ -2405,6 +2740,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           onSelectLine(null);
           onSelectArc?.(null);
           onSelectCylinder?.(null);
+          onSelectSphere?.(null);
           onSelectVertex?.(null);
           onSelectFace?.(null);
         }

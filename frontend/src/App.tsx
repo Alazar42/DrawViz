@@ -11,7 +11,7 @@ import { IsometricCanvas } from './canvas/IsometricCanvas';
 import { Three3DCanvas } from './canvas/Three3DCanvas';
 import { AxisIndicator } from './canvas/AxisIndicator';
 import { OrientationGizmo } from './canvas/OrientationGizmo';
-import { DrawVizProject, DrawingCylinder, Point3D } from './types/drawing';
+import { DrawVizProject, DrawingCylinder, DrawingSphere, Point3D } from './types/drawing';
 
 export const App: React.FC = () => {
   const state = useDrawingState();
@@ -55,6 +55,13 @@ export const App: React.FC = () => {
       }
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (state.selectedSphereId) {
+          e.preventDefault();
+          state.removeSphere(state.selectedSphereId);
+          state.setSelectedSphereId(null);
+          setStatusMessage('Deleted sphere');
+          return;
+        }
         if (state.selectedArcId) {
           e.preventDefault();
           state.removeArc(state.selectedArcId);
@@ -76,6 +83,24 @@ export const App: React.FC = () => {
           setStatusMessage('Deleted cylinder');
           return;
         }
+      }
+
+      if (e.key === 'Escape') {
+        state.setSelectedLineId(null);
+        state.setSelectedArcId(null);
+        state.setSelectedCylinderId(null);
+        state.setSelectedSphereId(null);
+        state.setSelectedVertex(null);
+        state.setSelectedFace(null);
+        state.setActiveAnchor(null);
+        setStatusMessage('Deselected all');
+        return;
+      }
+
+      if (e.key.toLowerCase() === 'g' && !modKey) {
+        state.setGroupMode(!state.groupMode);
+        setStatusMessage(`Group Transform Mode: ${!state.groupMode ? 'ON (Move entire group together)' : 'OFF (Move single element)'}`);
+        return;
       }
 
       switch (e.key.toLowerCase()) {
@@ -278,6 +303,7 @@ export const App: React.FC = () => {
     const x0 = 0;
     const y0 = 0;
     const z0 = elev;
+    const now = Date.now();
 
     if (type === 'cube') {
       const p = [
@@ -295,50 +321,57 @@ export const App: React.FC = () => {
         [4, 5], [5, 6], [6, 7], [7, 4],
         [0, 4], [1, 5], [2, 6], [3, 7],
       ];
-      const now = Date.now();
+      const groupId = `group-cube-${now}`;
+      const memberIds: string[] = [];
+
       edgePairs.forEach(([i, j], idx) => {
+        const lineId = `cube-${now}-${idx}`;
+        memberIds.push(lineId);
         state.addLine({
-          id: `cube-${now}-${idx}`,
+          id: lineId,
           start: p[i],
           end: p[j],
           layerId: state.activeLayerId,
+          groupId,
           style: { stroke: state.theme === 'dark' ? '#f4f4f5' : '#111827', strokeWidth: 1.75, lineType: 'solid' },
         });
       });
-      setStatusMessage('Added 3D Cube Mesh');
+
+      state.createGroup('Cube Mesh', 'mesh', memberIds);
+      setStatusMessage('Added 3D Cube Mesh (Grouped)');
     } else if (type === 'cylinder') {
+      const cylId = `cylinder-${now}-${Math.floor(Math.random() * 1000)}`;
+      const groupId = `group-cylinder-${now}`;
       const newCyl: DrawingCylinder = {
-        id: `cylinder-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        id: cylId,
         center: { x: x0 + s / 2, y: y0 + s / 2, z: z0 },
         radius: 3,
         height: 6,
         normal: { x: 0, y: 0, z: 1 },
         layerId: state.activeLayerId,
+        groupId,
         style: { stroke: state.theme === 'dark' ? '#f4f4f5' : '#111827', strokeWidth: 1.75, lineType: 'solid' },
       };
       state.addCylinder(newCyl);
-      setStatusMessage('Added 3D Cylinder Mesh');
+      state.createGroup('Cylinder Mesh', 'mesh', [cylId]);
+      setStatusMessage('Added 3D Cylinder Mesh (Grouped)');
     } else if (type === 'sphere') {
       const c = { x: x0 + s / 2, y: y0 + s / 2, z: z0 + s / 2 };
       const r = 3;
-      const planes: Array<{ plane: 'top' | 'front' | 'side'; norm: Point3D }> = [
-        { plane: 'top', norm: { x: 0, y: 0, z: 1 } },
-        { plane: 'front', norm: { x: 0, y: 1, z: 0 } },
-        { plane: 'side', norm: { x: 1, y: 0, z: 0 } },
-      ];
-      const now = Date.now();
-      planes.forEach(({ plane, norm }, idx) => {
-        state.addArc({
-          id: `sphere-${now}-${idx}`,
-          center: c,
-          radius: r,
-          plane,
-          normal: norm,
-          layerId: state.activeLayerId,
-          style: { stroke: state.theme === 'dark' ? '#f4f4f5' : '#111827', strokeWidth: 1.75, lineType: 'solid' },
-        });
-      });
-      setStatusMessage('Added 3D Sphere Mesh');
+      const sphId = `sphere-${now}-${Math.floor(Math.random() * 1000)}`;
+      const groupId = `group-sphere-${now}`;
+
+      const newSphere: DrawingSphere = {
+        id: sphId,
+        center: c,
+        radius: r,
+        layerId: state.activeLayerId,
+        groupId,
+        style: { stroke: state.theme === 'dark' ? '#f4f4f5' : '#111827', strokeWidth: 1.75, lineType: 'solid' },
+      };
+      state.addSphere(newSphere);
+      state.createGroup('Sphere Mesh', 'mesh', [sphId]);
+      setStatusMessage('Added 3D Solid Sphere (Grouped)');
     }
   };
 
@@ -418,10 +451,12 @@ export const App: React.FC = () => {
               lines={state.lines}
               arcs={state.arcs}
               cylinders={state.cylinders}
+              spheres={state.spheres}
               activeLayerId={state.activeLayerId}
               selectedLineId={state.selectedLineId}
               selectedArcId={state.selectedArcId}
               selectedCylinderId={state.selectedCylinderId}
+              selectedSphereId={state.selectedSphereId}
               activeTool={state.activeTool}
               onSelectTool={state.setActiveTool}
               gridSettings={state.gridSettings}
@@ -448,6 +483,7 @@ export const App: React.FC = () => {
                 if (id) {
                   state.setSelectedArcId(null);
                   state.setSelectedCylinderId(null);
+                  state.setSelectedSphereId(null);
                   setStatusMessage(`Selected Line ${id}`);
                 }
               }}
@@ -456,6 +492,7 @@ export const App: React.FC = () => {
                 if (id) {
                   state.setSelectedLineId(null);
                   state.setSelectedCylinderId(null);
+                  state.setSelectedSphereId(null);
                   const targetArc = state.arcs.find((a) => a.id === id);
                   const is2V = !!(targetArc?.startPoint && targetArc?.endPoint);
                   setStatusMessage(`Selected ${is2V ? 'Two-Vertex Arc' : 'Circle'} ${id}`);
@@ -466,7 +503,17 @@ export const App: React.FC = () => {
                 if (id) {
                   state.setSelectedLineId(null);
                   state.setSelectedArcId(null);
+                  state.setSelectedSphereId(null);
                   setStatusMessage(`Selected Cylinder ${id}`);
+                }
+              }}
+              onSelectSphere={(id) => {
+                state.setSelectedSphereId(id);
+                if (id) {
+                  state.setSelectedLineId(null);
+                  state.setSelectedArcId(null);
+                  state.setSelectedCylinderId(null);
+                  setStatusMessage(`Selected Sphere ${id}`);
                 }
               }}
               onAddLine={(line) => {
@@ -483,8 +530,13 @@ export const App: React.FC = () => {
                 state.addCylinder(cyl);
                 setStatusMessage(`3D Cylinder created R: ${cyl.radius} H: ${cyl.height}`);
               }}
+              onAddSphere={(sph) => {
+                state.addSphere(sph);
+                setStatusMessage(`3D Solid Sphere created R: ${sph.radius}`);
+              }}
               onUpdateArc={state.updateArc}
               onUpdateCylinder={state.updateCylinder}
+              onUpdateSphere={state.updateSphere}
               onRemoveLine={(id) => {
                 state.removeLine(id);
                 setStatusMessage('Line removed');
@@ -496,6 +548,10 @@ export const App: React.FC = () => {
               onRemoveCylinder={(id) => {
                 state.removeCylinder(id);
                 setStatusMessage('Cylinder removed');
+              }}
+              onRemoveSphere={(id) => {
+                state.removeSphere(id);
+                setStatusMessage('Sphere removed');
               }}
               onSetAnchor={state.setActiveAnchor}
               onSetElevation={(elev) => {
@@ -510,6 +566,10 @@ export const App: React.FC = () => {
               onToggleTheme={state.toggleTheme}
               onSetTheme={state.setTheme}
               onOpenSettings={() => setIsSettingsOpen(true)}
+              onTranslateEntity={state.translateEntity}
+              onCommitTransform={state.commitTransform}
+              groupMode={state.groupMode}
+              groups={state.groups}
             />
           </div>
 
@@ -553,15 +613,22 @@ export const App: React.FC = () => {
             selectedLine={state.selectedLine}
             selectedArc={state.selectedArc}
             selectedCylinder={state.cylinders.find((c) => c.id === state.selectedCylinderId) || null}
+            selectedSphere={state.spheres.find((s) => s.id === state.selectedSphereId) || null}
             selectedVertex={state.selectedVertex}
             selectedFace={state.selectedFace}
             totalLines={state.lines.length}
             totalArcs={state.arcs.length}
             totalCylinders={state.cylinders.length}
+            totalSpheres={state.spheres.length}
             unitSize={state.gridSettings.unitSize}
             zoom={state.viewport.zoom}
             activeTool={state.activeTool}
             theme={state.theme}
+            groups={state.groups}
+            groupMode={state.groupMode}
+            onToggleGroupMode={state.setGroupMode}
+            onCreateGroup={state.createGroup}
+            onUngroup={state.ungroup}
             onDeleteLine={(id) => {
               state.removeLine(id);
               setStatusMessage('Deleted line');
@@ -574,7 +641,12 @@ export const App: React.FC = () => {
               state.removeCylinder(id);
               setStatusMessage('Deleted cylinder');
             }}
+            onDeleteSphere={(id) => {
+              state.removeSphere(id);
+              setStatusMessage('Deleted sphere');
+            }}
             onUpdateArc={state.updateArc}
+            onUpdateSphere={state.updateSphere}
             onExtrudeArc={(arc) => {
               const norm =
                 arc.normal ??

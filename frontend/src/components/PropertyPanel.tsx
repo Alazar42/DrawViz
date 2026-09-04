@@ -1,27 +1,49 @@
-import { DrawingLine, DrawingArc, DrawingCylinder, Layer, ToolType, Point3D, Face3D, ArcBulgeDirection, AppTheme } from '../types/drawing';
+import {
+  DrawingLine,
+  DrawingArc,
+  DrawingCylinder,
+  DrawingSphere,
+  EntityGroup,
+  GroupType,
+  Layer,
+  ToolType,
+  Point3D,
+  Face3D,
+  ArcBulgeDirection,
+  AppTheme,
+} from '../types/drawing';
 import { calculateLogicalLength, getLineDirection } from '../geometry/isometric';
 import { logicalToThree, threeToLogical, threeToLogicalNormal, getTwoPointArcPoints } from '../geometry/circle3d';
-import { Trash2, Sparkles, Box, ArrowUpCircle } from 'lucide-react';
+import { Trash2, Sparkles, Box, ArrowUpCircle, Layers, Unlink, Link2, Circle, Plus, Minus } from 'lucide-react';
 
 interface PropertyPanelProps {
   selectedLine: DrawingLine | null;
   selectedArc?: DrawingArc | null;
   selectedCylinder?: DrawingCylinder | null;
+  selectedSphere?: DrawingSphere | null;
   selectedVertex?: Point3D | null;
   selectedFace?: Face3D | null;
   totalLines: number;
   totalArcs?: number;
   totalCylinders?: number;
+  totalSpheres?: number;
   layers?: Layer[];
   unitSize: number;
   zoom: number;
   activeTool: ToolType;
   theme?: AppTheme;
+  groups?: EntityGroup[];
+  groupMode?: boolean;
+  onToggleGroupMode?: (enabled: boolean) => void;
+  onCreateGroup?: (name: string, type: GroupType, memberIds: string[]) => string;
+  onUngroup?: (groupId: string) => void;
   onDeleteLine: (id: string) => void;
   onDeleteArc?: (id: string) => void;
   onDeleteCylinder?: (id: string) => void;
+  onDeleteSphere?: (id: string) => void;
   onExtrudeArc?: (arc: DrawingArc) => void;
   onUpdateArc?: (arc: DrawingArc) => void;
+  onUpdateSphere?: (sphere: DrawingSphere) => void;
   onUpdateLineStyle: (id: string, style: Partial<DrawingLine['style']>) => void;
   onSketchOnFace?: (face: Face3D) => void;
 }
@@ -30,25 +52,154 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   selectedLine,
   selectedArc = null,
   selectedCylinder = null,
+  selectedSphere = null,
   selectedVertex = null,
   selectedFace = null,
   totalLines,
   totalArcs = 0,
   totalCylinders = 0,
+  totalSpheres = 0,
   layers = [],
   unitSize,
   zoom,
   activeTool,
   theme = 'light',
+  groups = [],
+  groupMode = true,
+  onToggleGroupMode,
+  onCreateGroup,
+  onUngroup,
   onDeleteLine,
   onDeleteArc,
   onDeleteCylinder,
+  onDeleteSphere,
   onExtrudeArc,
   onUpdateArc,
+  onUpdateSphere,
   onUpdateLineStyle,
   onSketchOnFace,
 }) => {
   const isDark = theme === 'dark';
+
+  const renderGroupWidget = (
+    currentGroupId?: string,
+    defaultType: GroupType = 'edge',
+    memberIds: string[] = [],
+    defaultName: string = 'Group'
+  ) => {
+    const existingGroup = currentGroupId ? groups.find((g) => g.id === currentGroupId) : null;
+
+    if (existingGroup) {
+      return (
+        <div
+          style={{
+            marginTop: 6,
+            padding: '7px 9px',
+            backgroundColor: isDark ? '#1a1d24' : '#f1f5f9',
+            borderRadius: 5,
+            border: isDark ? '1px solid #2e3542' : '1px solid #cbd5e1',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 5,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <Layers size={12} style={{ color: isDark ? '#a5b4fc' : '#4f46e5' }} />
+              <span style={{ fontWeight: 600, fontSize: 10, color: isDark ? '#f8fafc' : '#0f172a' }}>
+                {existingGroup.name}
+              </span>
+            </div>
+            <span
+              style={{
+                fontSize: 9,
+                padding: '1px 5px',
+                borderRadius: 3,
+                backgroundColor: isDark ? '#312e81' : '#e0e7ff',
+                color: isDark ? '#c7d2fe' : '#4338ca',
+                textTransform: 'uppercase',
+                fontWeight: 700,
+              }}
+            >
+              {existingGroup.type}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: isDark ? '#94a3b8' : '#64748b' }}>
+            <span>Group Size</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{existingGroup.memberIds.length} members</span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 5, marginTop: 2 }}>
+            <button
+              onClick={() => onToggleGroupMode?.(!groupMode)}
+              style={{
+                flex: 1,
+                padding: '4px 6px',
+                borderRadius: 4,
+                border: 'none',
+                backgroundColor: groupMode ? '#4f46e5' : isDark ? '#334155' : '#94a3b8',
+                color: '#ffffff',
+                fontSize: 9,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+              title="Toggle moving all members together vs moving only this single element"
+            >
+              {groupMode ? 'Group Move: ON' : 'Single Move'}
+            </button>
+            <button
+              onClick={() => onUngroup?.(existingGroup.id)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '4px 6px',
+                borderRadius: 4,
+                border: isDark ? '1px solid #475569' : '1px solid #cbd5e1',
+                backgroundColor: 'transparent',
+                color: isDark ? '#cbd5e1' : '#475569',
+                fontSize: 9,
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+              title="Dissolve group"
+            >
+              <Unlink size={10} />
+              <span>Ungroup</span>
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ marginTop: 6 }}>
+        <button
+          onClick={() => onCreateGroup?.(defaultName, defaultType, memberIds)}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 5,
+            padding: '5px 8px',
+            backgroundColor: isDark ? '#1f242d' : '#f8fafc',
+            border: isDark ? '1px dashed #3e4856' : '1px dashed #94a3b8',
+            borderRadius: 4,
+            color: isDark ? '#93c5fd' : '#2563eb',
+            fontSize: 10,
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+          title={`Group this ${defaultType} with others of the same type`}
+        >
+          <Link2 size={11} />
+          <span>Group as {defaultType.charAt(0).toUpperCase() + defaultType.slice(1)}</span>
+        </button>
+      </div>
+    );
+  };
 
   const handleUpdateArcBulge = (newBulge: ArcBulgeDirection) => {
     if (!selectedArc || !selectedArc.startPoint || !selectedArc.endPoint || !onUpdateArc) return;
@@ -186,6 +337,8 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
               <option value="dashed">Dashed (Hidden)</option>
             </select>
           </div>
+
+          {renderGroupWidget(selectedLine.groupId, 'edge', [selectedLine.id], 'Edge Group')}
 
           <button
             onClick={() => onDeleteLine(selectedLine.id)}
@@ -456,6 +609,8 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
             </button>
           )}
 
+          {renderGroupWidget(selectedArc.groupId, 'edge', [selectedArc.id], 'Edge Group')}
+
           <button
             onClick={() => onDeleteArc?.(selectedArc.id)}
             style={{
@@ -516,6 +671,8 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
             </span>
           </div>
 
+          {renderGroupWidget(selectedCylinder.groupId, 'mesh', [selectedCylinder.id], 'Cylinder Group')}
+
           <button
             onClick={() => onDeleteCylinder?.(selectedCylinder.id)}
             style={{
@@ -536,6 +693,108 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
           >
             <Trash2 size={12} />
             <span>Delete Cylinder</span>
+          </button>
+        </div>
+      ) : selectedSphere ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: isDark ? '#e2e8f0' : '#374151' }}>
+            <span style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>Entity</span>
+            <span style={{ fontWeight: 600, color: '#38bdf8' }}>3D Solid Sphere</span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: isDark ? '#e2e8f0' : '#374151' }}>
+            <span style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>Center</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+              ({selectedSphere.center.x}, {selectedSphere.center.y}, {selectedSphere.center.z || 0})
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: isDark ? '#e2e8f0' : '#374151' }}>
+            <span style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>Radius (R)</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                onClick={() => onUpdateSphere?.({ ...selectedSphere, radius: Math.max(1, selectedSphere.radius - 1) })}
+                style={{
+                  width: 20,
+                  height: 20,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: isDark ? '#27272a' : '#f4f4f5',
+                  border: isDark ? '1px solid #3f3f46' : '1px solid #e4e4e7',
+                  borderRadius: 3,
+                  color: isDark ? '#f4f4f5' : '#18181b',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                -
+              </button>
+              <span style={{ fontFamily: 'monospace', fontWeight: 600, minWidth: 20, textAlign: 'center' }}>
+                {selectedSphere.radius}
+              </span>
+              <button
+                onClick={() => onUpdateSphere?.({ ...selectedSphere, radius: selectedSphere.radius + 1 })}
+                style={{
+                  width: 20,
+                  height: 20,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: isDark ? '#27272a' : '#f4f4f5',
+                  border: isDark ? '1px solid #3f3f46' : '1px solid #e4e4e7',
+                  borderRadius: 3,
+                  color: isDark ? '#f4f4f5' : '#18181b',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: isDark ? '#e2e8f0' : '#374151' }}>
+            <span style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>Diameter (Ø)</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{selectedSphere.radius * 2}</span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: isDark ? '#e2e8f0' : '#374151' }}>
+            <span style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>Surface Area</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+              {Math.round(4 * Math.PI * selectedSphere.radius * selectedSphere.radius)}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: isDark ? '#e2e8f0' : '#374151' }}>
+            <span style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>Volume</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+              {Math.round((4 / 3) * Math.PI * Math.pow(selectedSphere.radius, 3))}
+            </span>
+          </div>
+
+          {renderGroupWidget(selectedSphere.groupId, 'mesh', [selectedSphere.id], 'Sphere Mesh')}
+
+          <button
+            onClick={() => onDeleteSphere?.(selectedSphere.id)}
+            style={{
+              marginTop: 4,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              padding: '5px 8px',
+              backgroundColor: isDark ? '#22262e' : '#ffffff',
+              border: isDark ? '1px solid #334155' : '1px solid #e5e7eb',
+              borderRadius: 4,
+              color: '#ef4444',
+              fontSize: 11,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            <Trash2 size={12} />
+            <span>Delete Sphere</span>
           </button>
         </div>
       ) : selectedVertex ? (
@@ -559,6 +818,8 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
             <span style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>Coordinate Z (Height)</span>
             <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{selectedVertex.z || 0}</span>
           </div>
+
+          {renderGroupWidget(undefined, 'vertex', [`v_${selectedVertex.x}_${selectedVertex.y}_${selectedVertex.z || 0}`], 'Vertex Group')}
 
           <div
             style={{
@@ -621,6 +882,8 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
             <Sparkles size={13} />
             <span>Sketch on this Face</span>
           </button>
+
+          {renderGroupWidget(selectedFace.groupId, 'plane', [selectedFace.id], 'Plane Group')}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11 }}>
@@ -635,7 +898,7 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
           <div style={{ display: 'flex', justifyContent: 'space-between', color: isDark ? '#e2e8f0' : '#374151' }}>
             <span style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>Entities</span>
             <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
-              {totalLines} lines{totalArcs > 0 ? `, ${totalArcs} circles` : ''}{totalCylinders > 0 ? `, ${totalCylinders} cylinders` : ''}
+              {totalLines} lines{totalArcs > 0 ? `, ${totalArcs} circles` : ''}{totalCylinders > 0 ? `, ${totalCylinders} cylinders` : ''}{totalSpheres > 0 ? `, ${totalSpheres} spheres` : ''}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', color: isDark ? '#e2e8f0' : '#374151' }}>
