@@ -1,5 +1,5 @@
-import React from 'react';
-import { ToolType, GridSettings, AppMode } from '../types/drawing';
+import React, { useState } from 'react';
+import { ToolType, GridSettings, AppMode, AppTheme } from '../types/drawing';
 import { IsoplaneType } from '../geometry/isometric';
 import {
   PenLine,
@@ -10,13 +10,9 @@ import {
   MousePointer,
   Hand,
   ZoomIn,
-  BookOpen,
-  Trophy,
-  Activity,
-  Magnet,
-  Grid,
-  Layers,
-  Sparkles,
+  Boxes,
+  Box,
+  Globe,
   ChevronUp,
   ChevronDown,
 } from 'lucide-react';
@@ -32,272 +28,420 @@ interface ToolPanelProps {
   onSetElevation: (elevation: number) => void;
   activeIsoplane: IsoplaneType;
   onSetIsoplane: (isoplane: IsoplaneType) => void;
+  theme?: AppTheme;
+  onAddPrimitive?: (primitive: 'cube' | 'cylinder' | 'sphere') => void;
 }
+
+// Monochromatic iOS-style toggle switch
+const ToggleSwitch: React.FC<{
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  isDark?: boolean;
+}> = ({ checked, onChange, isDark }) => {
+  return (
+    <div
+      role="switch"
+      aria-checked={checked}
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange(!checked);
+      }}
+      style={{
+        width: 32,
+        height: 18,
+        backgroundColor: checked
+          ? (isDark ? '#f4f4f5' : '#18181b')
+          : (isDark ? '#3f3f46' : '#e5e7eb'),
+        borderRadius: 9,
+        position: 'relative',
+        cursor: 'pointer',
+        transition: 'background-color 0.15s ease',
+        flexShrink: 0,
+      }}
+    >
+      <div
+        style={{
+          width: 14,
+          height: 14,
+          borderRadius: 7,
+          backgroundColor: checked
+            ? (isDark ? '#18181b' : '#ffffff')
+            : (isDark ? '#a1a1aa' : '#ffffff'),
+          position: 'absolute',
+          top: 2,
+          left: checked ? 16 : 2,
+          transition: 'left 0.15s ease',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+        }}
+      />
+    </div>
+  );
+};
 
 export const ToolPanel: React.FC<ToolPanelProps> = ({
   activeTool,
   onSelectTool,
   gridSettings,
   onUpdateGridSettings,
-  appMode,
-  onSetAppMode,
-  activeElevation,
-  onSetElevation,
-  activeIsoplane,
-  onSetIsoplane,
+  theme = 'light',
+  onAddPrimitive,
 }) => {
-  const tools: { id: ToolType; label: string; icon: React.ReactNode; shortcut: string }[] = [
+  const isDark = theme === 'dark';
+  const [isMeshAccordionOpen, setIsMeshAccordionOpen] = useState<boolean>(true);
+
+  // Top drawing tools (before Add Mesh)
+  const topTools: { id: ToolType; label: string; icon: React.ReactNode; shortcut: string }[] = [
     { id: 'line', label: 'Line', icon: <PenLine size={16} />, shortcut: 'L' },
     { id: 'circle', label: 'Circle', icon: <Circle size={16} />, shortcut: 'C' },
     { id: 'arc', label: 'Half Arc', icon: <Disc size={16} />, shortcut: 'A' },
     { id: 'cylinder', label: 'Cylinder', icon: <Cylinder size={16} />, shortcut: 'Y' },
-    { id: 'eraser', label: 'Erase', icon: <Eraser size={16} />, shortcut: 'X' },
+  ];
+
+  // Bottom utility tools (after Add Mesh)
+  const bottomTools: { id: ToolType; label: string; icon: React.ReactNode; shortcut: string }[] = [
+    { id: 'eraser', label: 'Eraser', icon: <Eraser size={16} />, shortcut: 'X' },
     { id: 'select', label: 'Select', icon: <MousePointer size={16} />, shortcut: 'V' },
     { id: 'pan', label: 'Pan', icon: <Hand size={16} />, shortcut: 'H / Space' },
     { id: 'zoom', label: 'Zoom', icon: <ZoomIn size={16} />, shortcut: 'Z' },
   ];
 
+  const renderToolButton = (t: { id: ToolType; label: string; icon: React.ReactNode; shortcut: string }) => {
+    const isActive = activeTool === t.id;
+    return (
+      <button
+        key={t.id}
+        onClick={() => onSelectTool(t.id)}
+        title={`${t.label} (${t.shortcut})`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+          padding: '6px 10px',
+          borderRadius: 6,
+          border: isActive
+            ? (isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb')
+            : '1px solid transparent',
+          backgroundColor: isActive
+            ? (isDark ? '#27272a' : '#f3f4f6')
+            : 'transparent',
+          color: isActive
+            ? (isDark ? '#f4f4f5' : '#111827')
+            : (isDark ? '#a1a1aa' : '#4b5563'),
+          fontSize: 12,
+          fontWeight: isActive ? 600 : 400,
+          cursor: 'pointer',
+          transition: 'all 0.1s ease',
+          textAlign: 'left',
+          width: '100%',
+        }}
+        className="tool-btn"
+      >
+        {t.icon}
+        <span>{t.label}</span>
+      </button>
+    );
+  };
+
   return (
     <aside
       style={{
-        width: 140,
-        minWidth: 140,
-        maxWidth: 140,
-        backgroundColor: '#ffffff',
-        borderRight: '1px solid #e5e7eb',
+        width: 175,
+        minWidth: 175,
+        maxWidth: 175,
+        backgroundColor: isDark ? '#18181b' : '#ffffff',
+        borderRight: isDark ? '1px solid #27272a' : '1px solid #e5e7eb',
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'space-between',
-        padding: '12px 8px',
+        padding: '14px 10px',
         userSelect: 'none',
         overflowY: 'auto',
       }}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* TOOLS Section */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {/* ============================================================ */}
+        {/* 1. TOOLS Section                                             */}
+        {/* ============================================================ */}
         <div>
           <div
             style={{
               fontSize: 10,
               fontWeight: 700,
-              color: '#9ca3af',
-              letterSpacing: '0.06em',
+              color: isDark ? '#a1a1aa' : '#9ca3af',
+              letterSpacing: '0.08em',
               marginBottom: 8,
               paddingLeft: 4,
               textTransform: 'uppercase',
             }}
           >
-            Tools
+            TOOLS
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            {tools.map((t) => {
-              const isActive = activeTool === t.id;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => onSelectTool(t.id)}
-                  title={`${t.label} (${t.shortcut})`}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {topTools.map(renderToolButton)}
+
+            {/* Add Mesh Accordion Item */}
+            <div>
+              <button
+                onClick={() => setIsMeshAccordionOpen((prev) => !prev)}
+                title="Add 3D Primitives (Cube, Cylinder, Sphere)"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: '1px solid transparent',
+                  backgroundColor: 'transparent',
+                  color: isDark ? '#a1a1aa' : '#4b5563',
+                  fontSize: 12,
+                  fontWeight: 400,
+                  cursor: 'pointer',
+                  width: '100%',
+                  transition: 'all 0.1s ease',
+                }}
+                className="tool-btn"
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <Boxes size={16} />
+                  <span>Add Mesh</span>
+                </div>
+                {isMeshAccordionOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </button>
+
+              {/* Nested Mesh Primitives Card */}
+              {isMeshAccordionOpen && (
+                <div
                   style={{
+                    marginTop: 3,
+                    marginBottom: 4,
+                    marginLeft: 6,
+                    padding: '4px',
+                    borderRadius: 6,
+                    border: isDark ? '1px solid #27272a' : '1px solid #f3f4f6',
+                    backgroundColor: isDark ? '#202024' : '#f9fafb',
                     display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '6px 8px',
-                    borderRadius: 4,
-                    border: isActive ? '1px solid #d1d5db' : '1px solid transparent',
-                    backgroundColor: isActive ? '#f3f4f6' : 'transparent',
-                    color: isActive ? '#111827' : '#4b5563',
-                    fontSize: 12,
-                    fontWeight: isActive ? 600 : 400,
-                    cursor: 'pointer',
-                    transition: 'background-color 0.1s ease',
-                    textAlign: 'left',
-                    width: '100%',
+                    flexDirection: 'column',
+                    gap: 2,
                   }}
-                  className="tool-btn"
                 >
-                  {t.icon}
-                  <span>{t.label}</span>
-                </button>
-              );
-            })}
+                  <button
+                    onClick={() => onAddPrimitive?.('cube')}
+                    title="Add 3D Cube Mesh"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '5px 8px',
+                      borderRadius: 4,
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      color: isDark ? '#d4d4d8' : '#374151',
+                      fontSize: 11,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      width: '100%',
+                    }}
+                    className="tool-btn"
+                  >
+                    <Box size={14} />
+                    <span>Cube</span>
+                  </button>
+
+                  <button
+                    onClick={() => onAddPrimitive?.('cylinder')}
+                    title="Add 3D Cylinder Mesh"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '5px 8px',
+                      borderRadius: 4,
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      color: isDark ? '#d4d4d8' : '#374151',
+                      fontSize: 11,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      width: '100%',
+                    }}
+                    className="tool-btn"
+                  >
+                    <Cylinder size={14} />
+                    <span>Cylinder</span>
+                  </button>
+
+                  <button
+                    onClick={() => onAddPrimitive?.('sphere')}
+                    title="Add 3D Sphere Mesh"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '5px 8px',
+                      borderRadius: 4,
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      color: isDark ? '#d4d4d8' : '#374151',
+                      fontSize: 11,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      width: '100%',
+                    }}
+                    className="tool-btn"
+                  >
+                    <Globe size={14} />
+                    <span>Sphere</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {bottomTools.map(renderToolButton)}
           </div>
         </div>
 
-        {/* SNAP Section */}
+        {/* ============================================================ */}
+        {/* 2. SNAP Section                                              */}
+        {/* ============================================================ */}
         <div>
           <div
             style={{
               fontSize: 10,
               fontWeight: 700,
-              color: '#9ca3af',
-              letterSpacing: '0.06em',
+              color: isDark ? '#a1a1aa' : '#9ca3af',
+              letterSpacing: '0.08em',
               marginBottom: 8,
               paddingLeft: 4,
               textTransform: 'uppercase',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
             }}
           >
-            <Magnet size={11} />
-            <span>Snap</span>
+            SNAP
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 fontSize: 11,
-                color: '#374151',
-                cursor: 'pointer',
+                color: isDark ? '#d4d4d8' : '#374151',
                 padding: '2px 4px',
               }}
             >
               <span>Grid Snap</span>
-              <input
-                type="checkbox"
+              <ToggleSwitch
                 checked={gridSettings.snapToGrid}
-                onChange={(e) => onUpdateGridSettings({ snapToGrid: e.target.checked })}
-                style={{ cursor: 'pointer', accentColor: '#111827' }}
+                onChange={(checked) => onUpdateGridSettings({ snapToGrid: checked })}
+                isDark={isDark}
               />
-            </label>
+            </div>
 
-            <label
+            <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 fontSize: 11,
-                color: '#374151',
-                cursor: 'pointer',
+                color: isDark ? '#d4d4d8' : '#374151',
                 padding: '2px 4px',
               }}
             >
               <span>Isometric Snap</span>
-              <input
-                type="checkbox"
+              <ToggleSwitch
                 checked={gridSettings.snapToIsometric}
-                onChange={(e) => onUpdateGridSettings({ snapToIsometric: e.target.checked })}
-                style={{ cursor: 'pointer', accentColor: '#111827' }}
+                onChange={(checked) => onUpdateGridSettings({ snapToIsometric: checked })}
+                isDark={isDark}
               />
-            </label>
+            </div>
 
-            <label
+            <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 fontSize: 11,
-                color: '#374151',
-                cursor: 'pointer',
+                color: isDark ? '#d4d4d8' : '#374151',
                 padding: '2px 4px',
               }}
             >
               <span>Endpoints</span>
-              <input
-                type="checkbox"
+              <ToggleSwitch
                 checked={gridSettings.snapToEndpoints}
-                onChange={(e) => onUpdateGridSettings({ snapToEndpoints: e.target.checked })}
-                style={{ cursor: 'pointer', accentColor: '#111827' }}
+                onChange={(checked) => onUpdateGridSettings({ snapToEndpoints: checked })}
+                isDark={isDark}
               />
-            </label>
+            </div>
           </div>
         </div>
 
-        {/* BLENDER-STYLE AUTO SURFACE ALIGN Section */}
+        {/* ============================================================ */}
+        {/* 3. GRID Section                                              */}
+        {/* ============================================================ */}
         <div>
           <div
             style={{
               fontSize: 10,
               fontWeight: 700,
-              color: '#9ca3af',
-              letterSpacing: '0.06em',
+              color: isDark ? '#a1a1aa' : '#9ca3af',
+              letterSpacing: '0.08em',
               marginBottom: 8,
               paddingLeft: 4,
               textTransform: 'uppercase',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
             }}
           >
-            <Sparkles size={11} />
-            <span>Surface Align</span>
-          </div>
-          <div
-            style={{
-              padding: '8px 8px',
-              backgroundColor: '#f8fafc',
-              border: '1px solid #e2e8f0',
-              borderRadius: 4,
-              fontSize: 11,
-              color: '#475569',
-              lineHeight: 1.4,
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                fontWeight: 600,
-                color: '#0f172a',
-                marginBottom: 4,
-              }}
-            >
-              <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#22c55e' }} />
-              <span>Auto Normal</span>
-            </div>
-            <div style={{ fontSize: 10, color: '#64748b' }}>
-              Snaps flush to any inclined, vertical, or horizontal plane automatically (Blender style).
-            </div>
-          </div>
-        </div>
-
-        {/* GRID Section */}
-        <div>
-          <div
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              color: '#9ca3af',
-              letterSpacing: '0.06em',
-              marginBottom: 8,
-              paddingLeft: 4,
-              textTransform: 'uppercase',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-            }}
-          >
-            <Grid size={11} />
-            <span>Grid</span>
+            GRID
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 fontSize: 11,
-                color: '#374151',
+                color: isDark ? '#d4d4d8' : '#374151',
                 padding: '2px 4px',
               }}
             >
               <span>Size</span>
-              <span
+              <div
                 style={{
-                  fontSize: 10,
-                  fontFamily: 'monospace',
-                  padding: '1px 5px',
-                  backgroundColor: '#f3f4f6',
-                  borderRadius: 3,
-                  border: '1px solid #e5e7eb',
+                  position: 'relative',
+                  display: 'flex',
+                  alignItems: 'center',
                 }}
               >
-                1 × 1
-              </span>
+                <select
+                  value={gridSettings.unitSize}
+                  onChange={(e) => onUpdateGridSettings({ unitSize: Number(e.target.value) })}
+                  style={{
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    padding: '2px 18px 2px 6px',
+                    backgroundColor: isDark ? '#27272a' : '#f9fafb',
+                    borderRadius: 4,
+                    border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+                    color: isDark ? '#f4f4f5' : '#111827',
+                    cursor: 'pointer',
+                    outline: 'none',
+                    appearance: 'none',
+                  }}
+                >
+                  <option value={1} style={{ backgroundColor: isDark ? '#18181b' : '#ffffff' }}>1 × 1</option>
+                  <option value={2} style={{ backgroundColor: isDark ? '#18181b' : '#ffffff' }}>2 × 2</option>
+                  <option value={5} style={{ backgroundColor: isDark ? '#18181b' : '#ffffff' }}>5 × 5</option>
+                  <option value={10} style={{ backgroundColor: isDark ? '#18181b' : '#ffffff' }}>10 × 10</option>
+                </select>
+                <ChevronDown
+                  size={11}
+                  color={isDark ? '#a1a1aa' : '#6b7280'}
+                  style={{ position: 'absolute', right: 4, pointerEvents: 'none' }}
+                />
+              </div>
             </div>
 
             <div
@@ -306,103 +450,19 @@ export const ToolPanel: React.FC<ToolPanelProps> = ({
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 fontSize: 11,
-                color: '#374151',
-                padding: '2px 4px',
-              }}
-            >
-              <span>Type</span>
-              <span
-                style={{
-                  fontSize: 10,
-                  padding: '1px 5px',
-                  backgroundColor: '#f3f4f6',
-                  borderRadius: 3,
-                  border: '1px solid #e5e7eb',
-                  color: '#111827',
-                }}
-              >
-                Isometric
-              </span>
-            </div>
-
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                fontSize: 11,
-                color: '#374151',
-                cursor: 'pointer',
+                color: isDark ? '#d4d4d8' : '#374151',
                 padding: '2px 4px',
               }}
             >
               <span>Show Grid</span>
-              <input
-                type="checkbox"
+              <ToggleSwitch
                 checked={gridSettings.showGrid}
-                onChange={(e) => onUpdateGridSettings({ showGrid: e.target.checked })}
-                style={{ cursor: 'pointer', accentColor: '#111827' }}
+                onChange={(checked) => onUpdateGridSettings({ showGrid: checked })}
+                isDark={isDark}
               />
-            </label>
+            </div>
           </div>
         </div>
-      </div>
-
-      {/* Mode navigation icons at bottom */}
-      <div
-        style={{
-          borderTop: '1px solid #e5e7eb',
-          paddingTop: 10,
-          display: 'flex',
-          justifyContent: 'space-around',
-          alignItems: 'center',
-        }}
-      >
-        <button
-          onClick={() => onSetAppMode('practice')}
-          title="Practice Studio"
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            padding: 6,
-            borderRadius: 4,
-            color: appMode === 'practice' ? '#111827' : '#9ca3af',
-            backgroundColor: appMode === 'practice' ? '#f3f4f6' : 'transparent',
-          }}
-        >
-          <Activity size={16} />
-        </button>
-        <button
-          onClick={() => onSetAppMode('lessons')}
-          title="Lessons Curriculum"
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            padding: 6,
-            borderRadius: 4,
-            color: appMode === 'lessons' ? '#111827' : '#9ca3af',
-            backgroundColor: appMode === 'lessons' ? '#f3f4f6' : 'transparent',
-          }}
-        >
-          <BookOpen size={16} />
-        </button>
-        <button
-          onClick={() => onSetAppMode('challenges')}
-          title="Geometric Challenges"
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            padding: 6,
-            borderRadius: 4,
-            color: appMode === 'challenges' ? '#111827' : '#9ca3af',
-            backgroundColor: appMode === 'challenges' ? '#f3f4f6' : 'transparent',
-          }}
-        >
-          <Trophy size={16} />
-        </button>
       </div>
     </aside>
   );

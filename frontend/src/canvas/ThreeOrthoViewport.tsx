@@ -1,8 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback, memo } from 'react';
 import * as THREE from 'three';
-import { DrawingLine, DrawingArc, DrawingCylinder, Point3D } from '../types/drawing';
+import { DrawingLine, DrawingArc, DrawingCylinder, Point3D, AppTheme } from '../types/drawing';
 import { extractFacesFromLines } from '../geometry/faces';
-import { getArcPoints, getCylinderGeometryData, logicalToThreeNormal } from '../geometry/circle3d';
+import { getArcPoints, getArc3DPoints, getCylinderGeometryData, logicalToThreeNormal } from '../geometry/circle3d';
 
 export type OrthoCameraViewType = 'top' | 'front' | 'side';
 
@@ -15,6 +15,7 @@ interface ThreeOrthoViewportProps {
   selectedLineId?: string | null;
   onSelectLine?: (lineId: string | null) => void;
   hideOccluded?: boolean;
+  theme?: AppTheme;
 }
 
 // Convert DrawViz logical (X, Y: depth, Z: height) to Three.js world space:
@@ -32,7 +33,9 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
   selectedLineId,
   onSelectLine,
   hideOccluded = true,
+  theme = 'light',
 }) => {
+  const isDark = theme === 'dark';
   const mountRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -93,7 +96,7 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
     cameraRef.current = camera;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#ffffff');
+    scene.background = new THREE.Color(isDark ? '#181a20' : '#ffffff');
     sceneRef.current = scene;
 
     scene.add(gridGroupRef.current);
@@ -130,7 +133,7 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
       resizeObserver.disconnect();
       renderer.dispose();
     };
-  }, [viewType, requestRender]);
+  }, [viewType, isDark, requestRender]);
 
   // Update camera projection on zoom
   useEffect(() => {
@@ -156,7 +159,12 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
     const gridGroup = gridGroupRef.current;
     gridGroup.clear();
 
-    const grid = new THREE.GridHelper(24, 24, 0xe2e8f0, 0xf1f5f9);
+    const grid = new THREE.GridHelper(
+      24,
+      24,
+      isDark ? 0x334155 : 0xe2e8f0,
+      isDark ? 0x1e293b : 0xf1f5f9
+    );
     if (viewType === 'top') {
       grid.position.set(0, -0.05, 0);
     } else if (viewType === 'front') {
@@ -168,7 +176,7 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
     }
     gridGroup.add(grid);
     requestRender();
-  }, [viewType, requestRender]);
+  }, [viewType, isDark, requestRender]);
 
   // 3. Render 3D Model Geometry (Base Lines, Arcs, and Occluding Solid Faces)
   // Rebuilt ONLY when geometry changes, NOT on hover!
@@ -179,10 +187,10 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
     facesGroup.clear();
 
     // 1. Occluding Solid Planar Faces using memoized face extractor
-    if (hideOccluded && lines.length >= 3) {
-      const faces = extractFacesFromLines(lines);
+    if (hideOccluded && (lines.length >= 3 || arcs.length > 0)) {
+      const faces = extractFacesFromLines(lines, arcs);
       const faceMat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
+        color: isDark ? 0x181a20 : 0xffffff,
         side: THREE.DoubleSide,
         polygonOffset: true,
         polygonOffsetFactor: 1,
@@ -191,6 +199,8 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
 
       faces.forEach((f) => {
         const v = f.vertices.map(logicalToThree);
+        if (v.length < 3) return;
+
         const faceGeo = new THREE.BufferGeometry();
         if (v.length === 3) {
           const vertices = new Float32Array([
@@ -199,17 +209,32 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
             v[2].x, v[2].y, v[2].z,
           ]);
           faceGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-        } else if (v.length >= 4) {
-          const vertices = new Float32Array([
-            v[0].x, v[0].y, v[0].z,
-            v[1].x, v[1].y, v[1].z,
-            v[2].x, v[2].y, v[2].z,
+        } else {
+          // Robust 2D projection and triangulation
+          const normThree = f.normal ? logicalToThreeNormal(f.normal) : new THREE.Vector3(0, 1, 0);
+          const u = new THREE.Vector3();
+          if (Math.abs(normThree.y) < 0.9) {
+            u.crossVectors(normThree, new THREE.Vector3(0, 1, 0)).normalize();
+          } else {
+            u.crossVectors(normThree, new THREE.Vector3(1, 0, 0)).normalize();
+          }
+          const w = new THREE.Vector3().crossVectors(normThree, u).normalize();
 
-            v[0].x, v[0].y, v[0].z,
-            v[2].x, v[2].y, v[2].z,
-            v[3].x, v[3].y, v[3].z,
-          ]);
-          faceGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+          const pts2D: THREE.Vector2[] = v.map((pt) => new THREE.Vector2(pt.dot(u), pt.dot(w)));
+          const triangles = THREE.ShapeUtils.triangulateShape(pts2D, []);
+
+          const posArray: number[] = [];
+          for (const tri of triangles) {
+            for (const idx of tri) {
+              const pt = v[idx];
+              if (pt) {
+                posArray.push(pt.x, pt.y, pt.z);
+              }
+            }
+          }
+          if (posArray.length > 0) {
+            faceGeo.setAttribute('position', new THREE.Float32BufferAttribute(posArray, 3));
+          }
         }
         faceGeo.computeVertexNormals();
         facesGroup.add(new THREE.Mesh(faceGeo, faceMat));
@@ -218,7 +243,7 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
 
     // 2. Static Line Base Meshes
     const defaultLineMat = new THREE.LineBasicMaterial({
-      color: 0x0f172a,
+      color: isDark ? 0xe2e8f0 : 0x0f172a,
       linewidth: 1.5,
       depthTest: true,
     });
@@ -245,23 +270,9 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
 
     // 3. Arcs
     arcs.forEach((arc) => {
-      const cThree = logicalToThree(arc.center);
-      let normalThree: THREE.Vector3;
-      if (arc.normal) {
-        normalThree = logicalToThreeNormal(arc.normal);
-      } else if (arc.plane === 'top') {
-        normalThree = new THREE.Vector3(0, 1, 0);
-      } else if (arc.plane === 'front') {
-        normalThree = new THREE.Vector3(0, 0, 1);
-      } else {
-        normalThree = new THREE.Vector3(1, 0, 0);
-      }
-      const sDeg = arc.startAngle ?? 0;
-      const eDeg = arc.endAngle ?? 360;
-      const pts = getArcPoints(cThree, arc.radius, normalThree, sDeg, eDeg, 36);
-
+      const pts = getArc3DPoints(arc, 36);
       const arcGeo = new THREE.BufferGeometry().setFromPoints(pts);
-      const arcMat = new THREE.LineBasicMaterial({ color: 0x0f172a, linewidth: 1.5 });
+      const arcMat = new THREE.LineBasicMaterial({ color: isDark ? 0xe2e8f0 : 0x0f172a, linewidth: 1.5 });
       geoGroup.add(new THREE.Line(arcGeo, arcMat));
     });
 
@@ -276,7 +287,7 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
         normalThree
       );
 
-      const cylLineMat = new THREE.LineBasicMaterial({ color: 0x0f172a, linewidth: 1.5 });
+      const cylLineMat = new THREE.LineBasicMaterial({ color: isDark ? 0xe2e8f0 : 0x0f172a, linewidth: 1.5 });
       geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(basePoints), cylLineMat));
       geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(topPoints), cylLineMat));
       silhouetteLines.forEach(([p1, p2]) => {
@@ -285,7 +296,7 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
     });
 
     requestRender();
-  }, [lines, arcs, cylinders, hideOccluded, requestRender]);
+  }, [lines, arcs, cylinders, hideOccluded, isDark, requestRender]);
 
   // 4. Update Highlight Layer (Hover & Selection) - Instant lightweight update!
   useEffect(() => {
@@ -322,10 +333,35 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
         });
         hlGroup.add(new THREE.Line(geo, haloMat));
       }
+    } else {
+      const matchedArc = arcs.find((a) => a.id === targetId);
+      if (matchedArc) {
+        const isSelected = matchedArc.id === selectedLineId;
+        const pts = getArc3DPoints(matchedArc, 48);
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+
+        const arcMat = new THREE.LineBasicMaterial({
+          color: isSelected ? 0x4f46e5 : 0xf59e0b,
+          linewidth: isSelected ? 3 : 2,
+          depthTest: false,
+        });
+        hlGroup.add(new THREE.Line(geo, arcMat));
+
+        if (isSelected) {
+          const haloMat = new THREE.LineBasicMaterial({
+            color: 0x818cf8,
+            transparent: true,
+            opacity: 0.6,
+            linewidth: 5,
+            depthTest: false,
+          });
+          hlGroup.add(new THREE.Line(geo, haloMat));
+        }
+      }
     }
 
     requestRender();
-  }, [selectedLineId, hoveredLineId, lines, requestRender]);
+  }, [selectedLineId, hoveredLineId, lines, arcs, requestRender]);
 
   // Pointer Interactions: Selection
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -374,6 +410,42 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
       }
     });
 
+    arcs.forEach((arc) => {
+      const pts = getArc3DPoints(arc, 32);
+      for (let j = 0; j < pts.length - 1; j++) {
+        const v1 = pts[j].clone().project(camera);
+        const v2 = pts[j + 1].clone().project(camera);
+
+        const s1 = {
+          x: ((v1.x + 1) * mount.clientWidth) / 2,
+          y: ((-v1.y + 1) * mount.clientHeight) / 2,
+        };
+        const s2 = {
+          x: ((v2.x + 1) * mount.clientWidth) / 2,
+          y: ((-v2.y + 1) * mount.clientHeight) / 2,
+        };
+
+        const dx = s2.x - s1.x;
+        const dy = s2.y - s1.y;
+        const lenSq = dx * dx + dy * dy;
+        let dist = 999;
+
+        if (lenSq === 0) {
+          dist = Math.hypot(clickScreen.x - s1.x, clickScreen.y - s1.y);
+        } else {
+          const t = Math.max(0, Math.min(1, ((clickScreen.x - s1.x) * dx + (clickScreen.y - s1.y) * dy) / lenSq));
+          const px = s1.x + t * dx;
+          const py = s1.y + t * dy;
+          dist = Math.hypot(clickScreen.x - px, clickScreen.y - py);
+        }
+
+        if (dist < minScreenDist) {
+          minScreenDist = dist;
+          closestLineId = arc.id;
+        }
+      }
+    });
+
     onSelectLine?.(closestLineId);
   };
 
@@ -415,6 +487,36 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
       }
     }
 
+    for (let i = 0; i < arcs.length; i++) {
+      const arc = arcs[i];
+      const pts = getArc3DPoints(arc, 32);
+      for (let j = 0; j < pts.length - 1; j++) {
+        const v1 = pts[j].clone().project(camera);
+        const v2 = pts[j + 1].clone().project(camera);
+
+        const s1x = ((v1.x + 1) * mount.clientWidth) / 2;
+        const s1y = ((-v1.y + 1) * mount.clientHeight) / 2;
+        const s2x = ((v2.x + 1) * mount.clientWidth) / 2;
+        const s2y = ((-v2.y + 1) * mount.clientHeight) / 2;
+
+        const dx = s2x - s1x;
+        const dy = s2y - s1y;
+        const lenSq = dx * dx + dy * dy;
+        let dist = 999;
+        if (lenSq === 0) {
+          dist = Math.hypot(mouseScreen.x - s1x, mouseScreen.y - s1y);
+        } else {
+          const t = Math.max(0, Math.min(1, ((mouseScreen.x - s1x) * dx + (mouseScreen.y - s1y) * dy) / lenSq));
+          dist = Math.hypot(mouseScreen.x - (s1x + t * dx), mouseScreen.y - (s1y + t * dy));
+        }
+
+        if (dist < minScreenDist) {
+          minScreenDist = dist;
+          foundHoverId = arc.id;
+        }
+      }
+    }
+
     if (foundHoverId !== hoveredLineId) {
       setHoveredLineId(foundHoverId);
     }
@@ -431,10 +533,10 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
         position: 'relative',
         width: '100%',
         height: '100%',
-        border: '1px solid #e5e7eb',
+        border: isDark ? '1px solid #2d3139' : '1px solid #e5e7eb',
         borderRadius: 6,
         overflow: 'hidden',
-        backgroundColor: '#ffffff',
+        backgroundColor: isDark ? '#181a20' : '#ffffff',
         display: 'flex',
         flexDirection: 'column',
       }}
@@ -450,18 +552,18 @@ export const ThreeOrthoViewport: React.FC<ThreeOrthoViewportProps> = memo(({
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          backgroundColor: 'rgba(255, 255, 255, 0.92)',
+          backgroundColor: isDark ? 'rgba(30, 32, 38, 0.92)' : 'rgba(255, 255, 255, 0.92)',
           backdropFilter: 'blur(4px)',
-          border: '1px solid #e5e7eb',
+          border: isDark ? '1px solid #334155' : '1px solid #e5e7eb',
           borderRadius: 4,
           padding: '2px 8px',
           boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)',
         }}
       >
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#1f2937', letterSpacing: '0.04em' }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: isDark ? '#f8fafc' : '#1f2937', letterSpacing: '0.04em' }}>
           {title}
         </span>
-        <span style={{ fontSize: 10, color: '#6b7280', fontFamily: 'monospace' }}>
+        <span style={{ fontSize: 10, color: isDark ? '#94a3b8' : '#6b7280', fontFamily: 'monospace' }}>
           {viewType === 'top' ? 'X / Y [Planta]' : viewType === 'front' ? 'X / Z [Frontal]' : 'Y / Z [Lateral]'}
         </span>
       </div>

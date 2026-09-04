@@ -1,5 +1,19 @@
 import * as THREE from 'three';
-import { Point3D } from '../types/drawing';
+import { Point3D, DrawingArc, ArcBulgeDirection } from '../types/drawing';
+
+// Convert DrawViz logical (X, Y: depth, Z: height) to Three.js world space:
+// X_three = X_logical, Y_three = Z_logical (Up), Z_three = Y_logical (Depth)
+export function logicalToThree(pt: Point3D): THREE.Vector3 {
+  return new THREE.Vector3(pt.x, pt.z || 0, pt.y);
+}
+
+export function threeToLogical(v: THREE.Vector3): Point3D {
+  return {
+    x: Math.round(v.x),
+    y: Math.round(v.z),
+    z: Math.round(v.y),
+  };
+}
 
 // Temporary vectors for zero allocation
 const _up = new THREE.Vector3(0, 1, 0);
@@ -147,4 +161,149 @@ export function calculateFaceNormalThree(vertices: Point3D[]): THREE.Vector3 {
   if (norm.lengthSq() < 1e-4) return new THREE.Vector3(0, 1, 0);
   return norm;
 }
+
+export interface TwoPointArcResult {
+  points: THREE.Vector3[];
+  center: THREE.Vector3;
+  normal: THREE.Vector3;
+  actualRadius: number;
+  subtendedAngle: number; // in radians
+  chordDistance: number;
+  apex: THREE.Vector3;
+}
+
+/**
+ * Computes an arc between two 3D vertices with a customizable radius and 6-axis bulge orientation.
+ * Supports +z, -z, +y, -y, +x, -x orientations.
+ */
+export function getTwoPointArcPoints(
+  startPoint: THREE.Vector3,
+  endPoint: THREE.Vector3,
+  radius: number,
+  bulgeDir: ArcBulgeDirection = '+z',
+  segments: number = 48
+): TwoPointArcResult {
+  const chord = new THREE.Vector3().subVectors(endPoint, startPoint);
+  const chordDistance = chord.length();
+
+  if (chordDistance < 1e-4) {
+    return {
+      points: [startPoint.clone(), endPoint.clone()],
+      center: startPoint.clone(),
+      normal: new THREE.Vector3(0, 1, 0),
+      actualRadius: 0,
+      subtendedAngle: 0,
+      chordDistance: 0,
+      apex: startPoint.clone(),
+    };
+  }
+
+  const uChord = chord.clone().normalize();
+  const M = new THREE.Vector3().addVectors(startPoint, endPoint).multiplyScalar(0.5);
+
+  // Map bulgeDir (in DrawViz logical coordinates: +x, -x, +y, -y, +z, -z) to Three.js coordinates:
+  // Three: X = logical X, Y = logical Z (Up), Z = logical Y (Depth)
+  const dirMap: Record<ArcBulgeDirection, THREE.Vector3> = {
+    '+z': new THREE.Vector3(0, 1, 0),
+    '-z': new THREE.Vector3(0, -1, 0),
+    '+y': new THREE.Vector3(0, 0, 1),
+    '-y': new THREE.Vector3(0, 0, -1),
+    '+x': new THREE.Vector3(1, 0, 0),
+    '-x': new THREE.Vector3(-1, 0, 0),
+  };
+
+  const targetDir = dirMap[bulgeDir] || dirMap['+z'];
+  let bRaw = new THREE.Vector3().copy(targetDir).addScaledVector(uChord, -targetDir.dot(uChord));
+
+  // If target direction is nearly parallel to chord, fall back to perpendicular axes
+  if (bRaw.length() < 1e-3) {
+    const fallbacks: THREE.Vector3[] = [
+      dirMap['+z'],
+      dirMap['-z'],
+      dirMap['+y'],
+      dirMap['-y'],
+      dirMap['+x'],
+      dirMap['-x'],
+    ];
+    for (const fb of fallbacks) {
+      const cand = new THREE.Vector3().copy(fb).addScaledVector(uChord, -fb.dot(uChord));
+      if (cand.length() >= 1e-3) {
+        bRaw = cand;
+        break;
+      }
+    }
+  }
+
+  const bHat = bRaw.clone().normalize();
+  const normal = new THREE.Vector3().crossVectors(uChord, bHat).normalize();
+
+  // Minimum radius is half the chord length (semicircle / pi radians)
+  const minR = chordDistance / 2;
+  const actualRadius = Math.max(radius || (chordDistance * 2), minR);
+  const dM = Math.sqrt(Math.max(0, actualRadius * actualRadius - minR * minR));
+
+  // Circle center is on the opposite side of the chord from the bulge
+  const center = new THREE.Vector3().copy(M).addScaledVector(bHat, -dM);
+
+  const sinAlpha = Math.min(1, minR / actualRadius);
+  const alpha = Math.asin(sinAlpha);
+  const subtendedAngle = 2 * alpha;
+
+  const points: THREE.Vector3[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = -1 + (2 * i) / segments;
+    const theta = t * alpha;
+    const pt = new THREE.Vector3()
+      .copy(center)
+      .addScaledVector(bHat, actualRadius * Math.cos(theta))
+      .addScaledVector(uChord, actualRadius * Math.sin(theta));
+    points.push(pt);
+  }
+
+  // Ensure first and last points match startPoint and endPoint exactly
+  points[0].copy(startPoint);
+  points[points.length - 1].copy(endPoint);
+
+  const apex = new THREE.Vector3().copy(center).addScaledVector(bHat, actualRadius);
+
+  return {
+    points,
+    center,
+    normal,
+    actualRadius,
+    subtendedAngle,
+    chordDistance,
+    apex,
+  };
+}
+
+/**
+ * Universal arc 3D point generator supporting both full circles, legacy arcs,
+ * and 2-vertex arcs.
+ */
+export function getArc3DPoints(arc: DrawingArc, segments: number = 48): THREE.Vector3[] {
+  if (arc.startPoint && arc.endPoint) {
+    const p1 = logicalToThree(arc.startPoint);
+    const p2 = logicalToThree(arc.endPoint);
+    const res = getTwoPointArcPoints(p1, p2, arc.radius, arc.bulgeDir || '+z', segments);
+    return res.points;
+  }
+
+  const centerThree = logicalToThree(arc.center);
+  let normalThree: THREE.Vector3;
+  if (arc.normal) {
+    normalThree = logicalToThreeNormal(arc.normal);
+  } else if (arc.plane === 'top') {
+    normalThree = new THREE.Vector3(0, 1, 0);
+  } else if (arc.plane === 'front') {
+    normalThree = new THREE.Vector3(0, 0, 1);
+  } else {
+    normalThree = new THREE.Vector3(1, 0, 0);
+  }
+
+  const startDeg = arc.startAngle ?? 0;
+  const endDeg = arc.endAngle ?? 360;
+  return getArcPoints(centerThree, arc.radius, normalThree, startDeg, endDeg, segments);
+}
+
 

@@ -1,7 +1,12 @@
-import { DrawingLine, Face3D, IsoplanePlane, Point3D } from '../types/drawing';
+import { DrawingLine, DrawingArc, Face3D, IsoplanePlane, Point3D } from '../types/drawing';
+import { getArc3DPoints } from './circle3d';
 
-function ptKey(p: Point3D): string {
-  return `${p.x},${p.y},${p.z || 0}`;
+export function quantizeCoord(v: number): number {
+  return Math.round((v || 0) * 20) / 20; // 0.05 tolerance
+}
+
+export function ptKey(p: Point3D): string {
+  return `${quantizeCoord(p.x)},${quantizeCoord(p.y)},${quantizeCoord(p.z || 0)}`;
 }
 
 // Logical to Three world space conversion:
@@ -12,42 +17,86 @@ function logicalToThreeVec(p: Point3D): [number, number, number] {
 
 interface CachedFaces {
   linesRef: DrawingLine[];
+  arcsRef?: DrawingArc[];
   faces: Face3D[];
 }
 
 let faceCache: CachedFaces | null = null;
 
 /**
- * Extracts coplanar faces (3-cycles and 4-cycles) from 3D line wireframe geometry.
- * Memoized by lines array reference for O(1) retrieval across components.
+ * Extracts all coplanar faces (triangles, quads, and arbitrary N-gons)
+ * from 3D line wireframe and arc geometry.
+ * Uses Breadth-First Planar Cycle Search to guarantee minimal, chordless faces.
  */
-export function extractFacesFromLines(lines: DrawingLine[]): Face3D[] {
-  if (!lines || lines.length < 3) {
+export function extractFacesFromLines(lines: DrawingLine[], arcs?: DrawingArc[]): Face3D[] {
+  if ((!lines || lines.length < 3) && (!arcs || arcs.length === 0)) {
     return [];
   }
 
   // Check cache
-  if (faceCache && faceCache.linesRef === lines) {
+  if (faceCache && faceCache.linesRef === lines && faceCache.arcsRef === arcs) {
     return faceCache.faces;
   }
 
   const adj = new Map<string, { pt: Point3D; neighbors: Map<string, Point3D> }>();
 
-  for (const line of lines) {
-    const k1 = ptKey(line.start);
-    const k2 = ptKey(line.end);
-    if (k1 === k2) continue;
+  function addEdge(p1: Point3D, p2: Point3D) {
+    const k1 = ptKey(p1);
+    const k2 = ptKey(p2);
+    if (k1 === k2) return;
 
-    if (!adj.has(k1)) adj.set(k1, { pt: line.start, neighbors: new Map() });
-    if (!adj.has(k2)) adj.set(k2, { pt: line.end, neighbors: new Map() });
+    if (!adj.has(k1)) adj.set(k1, { pt: p1, neighbors: new Map() });
+    if (!adj.has(k2)) adj.set(k2, { pt: p2, neighbors: new Map() });
 
-    adj.get(k1)!.neighbors.set(k2, line.end);
-    adj.get(k2)!.neighbors.set(k1, line.start);
+    adj.get(k1)!.neighbors.set(k2, p2);
+    adj.get(k2)!.neighbors.set(k1, p1);
   }
 
-  const seenFaces = new Set<string>();
-  const facesList: Face3D[] = [];
+  // 1. Add all wireframe lines
+  if (lines) {
+    for (const line of lines) {
+      addEdge(line.start, line.end);
+    }
+  }
 
+  const facesList: Face3D[] = [];
+  const seenFaces = new Set<string>();
+
+  // 2. Add full circular faces & 2-vertex arcs
+  if (arcs) {
+    for (const arc of arcs) {
+      if (arc.startPoint && arc.endPoint) {
+        // Discretize 2-vertex arc into wireframe segments
+        const pts = getArc3DPoints(arc, 16);
+        for (let i = 0; i < pts.length - 1; i++) {
+          const ptA: Point3D = { x: pts[i].x, y: pts[i].z, z: pts[i].y };
+          const ptB: Point3D = { x: pts[i + 1].x, y: pts[i + 1].z, z: pts[i + 1].y };
+          addEdge(ptA, ptB);
+        }
+      } else if (arc.radius > 0) {
+        // Full circle disc face
+        const pts = getArc3DPoints(arc, 32);
+        if (pts.length >= 3) {
+          const circleVerts: Point3D[] = pts.map((p) => ({ x: p.x, y: p.z, z: p.y }));
+          const norm = arc.normal || { x: 0, y: 0, z: 1 };
+          const circleKey = `circle-${ptKey(arc.center)}-r${Math.round(arc.radius)}`;
+          if (!seenFaces.has(circleKey)) {
+            seenFaces.add(circleKey);
+            facesList.push({
+              id: `face-${circleKey}`,
+              normal: norm,
+              center: { ...arc.center },
+              vertices: circleVerts,
+              plane: arc.plane || 'top',
+              elevation: arc.center.z || 0,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Planar Shortest-Cycle Search for Arbitrary N-gons
   const keys = Array.from(adj.keys());
 
   for (let i = 0; i < keys.length; i++) {
@@ -56,136 +105,145 @@ export function extractFacesFromLines(lines: DrawingLine[]): Face3D[] {
     const p0 = node0.pt;
     const v0 = logicalToThreeVec(p0);
 
-    const neighbors0 = Array.from(node0.neighbors.entries());
+    const neighbors = Array.from(node0.neighbors.entries());
+    if (neighbors.length < 2) continue;
 
-    for (const [k1, p1] of neighbors0) {
-      if (k1 < k0) continue; // Enforce ordering to prevent redundant cycles
-      const node1 = adj.get(k1)!;
+    for (let a = 0; a < neighbors.length; a++) {
+      const [k1, p1] = neighbors[a];
       const v1 = logicalToThreeVec(p1);
 
-      const neighbors1 = Array.from(node1.neighbors.entries());
-
-      for (const [k2, p2] of neighbors1) {
-        if (k2 === k0) continue;
-        const node2 = adj.get(k2)!;
+      for (let b = a + 1; b < neighbors.length; b++) {
+        const [k2, p2] = neighbors[b];
         const v2 = logicalToThreeVec(p2);
 
-        // 1. Check Triangle Face (p0 -> p1 -> p2 -> p0)
-        if (node2.neighbors.has(k0)) {
-          const triKeys = [k0, k1, k2].sort().join('|');
-          if (!seenFaces.has(triKeys)) {
-            seenFaces.add(triKeys);
+        // Vector a: v1 - v0
+        const ax = v1[0] - v0[0];
+        const ay = v1[1] - v0[1];
+        const az = v1[2] - v0[2];
 
-            // Compute Normal
-            const ax = v1[0] - v0[0];
-            const ay = v1[1] - v0[1];
-            const az = v1[2] - v0[2];
+        // Vector b: v2 - v0
+        const bx = v2[0] - v0[0];
+        const by = v2[1] - v0[1];
+        const bz = v2[2] - v0[2];
 
-            const bx = v2[0] - v0[0];
-            const by = v2[1] - v0[1];
-            const bz = v2[2] - v0[2];
+        // Plane normal = a x b
+        let nx = ay * bz - az * by;
+        let ny = az * bx - ax * bz;
+        let nz = ax * by - ay * bx;
+        const len = Math.hypot(nx, ny, nz);
 
-            let nx = ay * bz - az * by;
-            let ny = az * bx - ax * bz;
-            let nz = ax * by - ay * bx;
-            const len = Math.hypot(nx, ny, nz);
+        if (len < 1e-4) continue; // Collinear incident edges
+        nx /= len;
+        ny /= len;
+        nz /= len;
 
-            if (len > 1e-4) {
-              nx /= len;
-              ny /= len;
-              nz /= len;
+        // BFS on candidate plane from k1 to k2 avoiding k0
+        // Find shortest planar path between k1 and k2
+        const queue: { key: string; path: string[] }[] = [{ key: k1, path: [k1] }];
+        const visited = new Set<string>([k0, k1]);
+        let foundPath: string[] | null = null;
+        const maxDepth = 16;
 
-              let facePlane: IsoplanePlane = 'top';
-              let elev = Math.round(((p0.z || 0) + (p1.z || 0) + (p2.z || 0)) / 3);
-              if (Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz)) {
-                facePlane = 'top';
-                elev = Math.round(((p0.z || 0) + (p1.z || 0) + (p2.z || 0)) / 3);
-              } else if (Math.abs(nz) >= Math.abs(nx)) {
-                facePlane = 'front';
-                elev = Math.round((p0.y + p1.y + p2.y) / 3);
-              } else {
-                facePlane = 'side';
-                elev = Math.round((p0.x + p1.x + p2.x) / 3);
-              }
+        while (queue.length > 0) {
+          const { key: currKey, path } = queue.shift()!;
+          if (path.length > maxDepth) break;
 
-              facesList.push({
-                id: `face-tri-${triKeys}`,
-                normal: { x: Number(nx.toFixed(4)), y: Number(nz.toFixed(4)), z: Number(ny.toFixed(4)) },
-                center: {
-                  x: Math.round((p0.x + p1.x + p2.x) / 3),
-                  y: Math.round((p0.y + p1.y + p2.y) / 3),
-                  z: Math.round(((p0.z || 0) + (p1.z || 0) + (p2.z || 0)) / 3),
-                },
-                vertices: [p0, p1, p2],
-                plane: facePlane,
-                elevation: elev,
-              });
+          if (currKey === k2) {
+            foundPath = path;
+            break;
+          }
+
+          const currNode = adj.get(currKey);
+          if (!currNode) continue;
+
+          for (const [nextKey, nextPt] of currNode.neighbors.entries()) {
+            if (nextKey === k2) {
+              foundPath = [...path, nextKey];
+              queue.length = 0;
+              break;
+            }
+
+            if (visited.has(nextKey)) continue;
+
+            // Check if nextPt lies on candidate plane
+            const nv = logicalToThreeVec(nextPt);
+            const distToPlane = Math.abs((nv[0] - v0[0]) * nx + (nv[1] - v0[1]) * ny + (nv[2] - v0[2]) * nz);
+            if (distToPlane < 0.25) {
+              visited.add(nextKey);
+              queue.push({ key: nextKey, path: [...path, nextKey] });
             }
           }
         }
 
-        // 2. Check Quad Face (p0 -> p1 -> p2 -> p3 -> p0)
-        for (const [k3, p3] of node2.neighbors.entries()) {
-          if (k3 === k0 || k3 === k1) continue;
-          const node3 = adj.get(k3)!;
+        if (foundPath && foundPath.length >= 2) {
+          // Complete cycle: k0 -> k1 -> ... -> k2 -> k0
+          const fullCycleKeys = [k0, ...foundPath];
+          const sortedKeys = [...fullCycleKeys].sort().join('|');
 
-          if (node3.neighbors.has(k0)) {
-            const quadKeys = [k0, k1, k2, k3].sort().join('|');
-            if (!seenFaces.has(quadKeys)) {
-              seenFaces.add(quadKeys);
+          if (!seenFaces.has(sortedKeys)) {
+            seenFaces.add(sortedKeys);
 
-              const v3 = logicalToThreeVec(p3);
+            const cycleVertices: Point3D[] = fullCycleKeys.map((k) => adj.get(k)!.pt);
 
-              // Normal via vectors (v1-v0) x (v2-v0)
-              const ax = v1[0] - v0[0];
-              const ay = v1[1] - v0[1];
-              const az = v1[2] - v0[2];
+            // Compute 2D polygon area to reject degenerate loops
+            // Project into 2D using basis vectors on the plane
+            let ux = 0, uy = 1, uz = 0;
+            if (Math.abs(ny) > 0.9) {
+              ux = 1; uy = 0; uz = 0;
+            }
+            // u = cross(n, up)
+            let tx = ny * uz - nz * uy;
+            let ty = nz * ux - nx * uz;
+            let tz = nx * uy - ny * ux;
+            const tlen = Math.hypot(tx, ty, tz);
+            if (tlen > 1e-4) {
+              tx /= tlen; ty /= tlen; tz /= tlen;
+            }
+            // v = cross(n, t)
+            const bx2 = ny * tz - nz * ty;
+            const by2 = nz * tx - nx * tz;
+            const bz2 = nx * ty - ny * tx;
 
-              const bx = v2[0] - v0[0];
-              const by = v2[1] - v0[1];
-              const bz = v2[2] - v0[2];
+            // Shoelace formula in 2D
+            let area2D = 0;
+            const nPts = cycleVertices.length;
+            for (let idx = 0; idx < nPts; idx++) {
+              const pA = logicalToThreeVec(cycleVertices[idx]);
+              const pB = logicalToThreeVec(cycleVertices[(idx + 1) % nPts]);
+              const uA = pA[0] * tx + pA[1] * ty + pA[2] * tz;
+              const vA = pA[0] * bx2 + pA[1] * by2 + pA[2] * bz2;
+              const uB = pB[0] * tx + pB[1] * ty + pB[2] * tz;
+              const vB = pB[0] * bx2 + pB[1] * by2 + pB[2] * bz2;
+              area2D += uA * vB - uB * vA;
+            }
 
-              let nx = ay * bz - az * by;
-              let ny = az * bx - ax * bz;
-              let nz = ax * by - ay * bx;
-              const len = Math.hypot(nx, ny, nz);
+            if (Math.abs(area2D) >= 0.2) {
+              let facePlane: IsoplanePlane = 'top';
+              let elev = Math.round(cycleVertices.reduce((s, p) => s + (p.z || 0), 0) / cycleVertices.length);
 
-              if (len > 1e-4) {
-                nx /= len;
-                ny /= len;
-                nz /= len;
-
-                // Check coplanarity of v3: dot((v3 - v0), normal) ~ 0
-                const dot = (v3[0] - v0[0]) * nx + (v3[1] - v0[1]) * ny + (v3[2] - v0[2]) * nz;
-                if (Math.abs(dot) < 0.2) {
-                  let facePlane: IsoplanePlane = 'top';
-                  let elev = Math.round(((p0.z || 0) + (p1.z || 0) + (p2.z || 0) + (p3.z || 0)) / 4);
-
-                  if (Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz)) {
-                    facePlane = 'top';
-                    elev = Math.round(((p0.z || 0) + (p1.z || 0) + (p2.z || 0) + (p3.z || 0)) / 4);
-                  } else if (Math.abs(nz) >= Math.abs(nx)) {
-                    facePlane = 'front';
-                    elev = Math.round((p0.y + p1.y + p2.y + p3.y) / 4);
-                  } else {
-                    facePlane = 'side';
-                    elev = Math.round((p0.x + p1.x + p2.x + p3.x) / 4);
-                  }
-
-                  facesList.push({
-                    id: `face-${quadKeys}`,
-                    normal: { x: Number(nx.toFixed(4)), y: Number(nz.toFixed(4)), z: Number(ny.toFixed(4)) },
-                    center: {
-                      x: Math.round((p0.x + p1.x + p2.x + p3.x) / 4),
-                      y: Math.round((p0.y + p1.y + p2.y + p3.y) / 4),
-                      z: Math.round(((p0.z || 0) + (p1.z || 0) + (p2.z || 0) + (p3.z || 0)) / 4),
-                    },
-                    vertices: [p0, p1, p2, p3],
-                    plane: facePlane,
-                    elevation: elev,
-                  });
-                }
+              if (Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz)) {
+                facePlane = 'top';
+                elev = Math.round(cycleVertices.reduce((s, p) => s + (p.z || 0), 0) / cycleVertices.length);
+              } else if (Math.abs(nz) >= Math.abs(nx)) {
+                facePlane = 'front';
+                elev = Math.round(cycleVertices.reduce((s, p) => s + p.y, 0) / cycleVertices.length);
+              } else {
+                facePlane = 'side';
+                elev = Math.round(cycleVertices.reduce((s, p) => s + p.x, 0) / cycleVertices.length);
               }
+
+              facesList.push({
+                id: `face-${sortedKeys}`,
+                normal: { x: Number(nx.toFixed(4)), y: Number(nz.toFixed(4)), z: Number(ny.toFixed(4)) },
+                center: {
+                  x: Math.round(cycleVertices.reduce((s, p) => s + p.x, 0) / cycleVertices.length),
+                  y: Math.round(cycleVertices.reduce((s, p) => s + p.y, 0) / cycleVertices.length),
+                  z: Math.round(cycleVertices.reduce((s, p) => s + (p.z || 0), 0) / cycleVertices.length),
+                },
+                vertices: cycleVertices,
+                plane: facePlane,
+                elevation: elev,
+              });
             }
           }
         }
@@ -195,6 +253,7 @@ export function extractFacesFromLines(lines: DrawingLine[]): Face3D[] {
 
   faceCache = {
     linesRef: lines,
+    arcsRef: arcs,
     faces: facesList,
   };
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppMode } from '../types/drawing';
+import { AppMode, AppTheme } from '../types/drawing';
 import {
   Undo2,
   Redo2,
@@ -9,6 +9,8 @@ import {
   Settings,
   ChevronDown,
   Download,
+  Sun,
+  Moon,
 } from 'lucide-react';
 
 interface TopBarProps {
@@ -23,6 +25,8 @@ interface TopBarProps {
   onSave: () => void;
   onExportSvg: () => void;
   onOpenSettings: () => void;
+  theme?: AppTheme;
+  onToggleTheme?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -37,20 +41,18 @@ export const TopBar: React.FC<TopBarProps> = ({
   onSave,
   onExportSvg,
   onOpenSettings,
+  theme = 'light',
+  onToggleTheme,
 }) => {
-  const modeLabels: Record<AppMode, string> = {
-    practice: 'Practice Mode',
-    lessons: 'Lessons',
-    challenges: 'Challenges',
-  };
+  const isDark = theme === 'dark';
 
   return (
     <header
       style={{
         height: 44,
         minHeight: 44,
-        backgroundColor: '#ffffff',
-        borderBottom: '1px solid #e5e7eb',
+        backgroundColor: isDark ? '#1e2026' : '#ffffff',
+        borderBottom: isDark ? '1px solid #2d3139' : '1px solid #e5e7eb',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -67,7 +69,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             fontSize: 15,
             fontWeight: 700,
             letterSpacing: '-0.02em',
-            color: '#111827',
+            color: isDark ? '#f8fafc' : '#111827',
           }}
         >
           DrawViz
@@ -75,10 +77,10 @@ export const TopBar: React.FC<TopBarProps> = ({
         <span
           style={{
             fontSize: 11,
-            color: '#6b7280',
+            color: isDark ? '#94a3b8' : '#6b7280',
             fontWeight: 400,
             paddingLeft: 6,
-            borderLeft: '1px solid #e5e7eb',
+            borderLeft: isDark ? '1px solid #334155' : '1px solid #e5e7eb',
           }}
         >
           Interactive Technical Drawing Studio
@@ -94,12 +96,12 @@ export const TopBar: React.FC<TopBarProps> = ({
             gap: 6,
             padding: '4px 10px',
             borderRadius: 4,
-            border: '1px solid #e5e7eb',
-            backgroundColor: '#f9fafb',
+            border: isDark ? '1px solid #334155' : '1px solid #e5e7eb',
+            backgroundColor: isDark ? '#282c34' : '#f9fafb',
             cursor: 'pointer',
             fontSize: 12,
             fontWeight: 500,
-            color: '#1f2937',
+            color: isDark ? '#f1f5f9' : '#1f2937',
           }}
         >
           <select
@@ -111,16 +113,22 @@ export const TopBar: React.FC<TopBarProps> = ({
               outline: 'none',
               fontSize: 12,
               fontWeight: 500,
-              color: '#1f2937',
+              color: isDark ? '#f1f5f9' : '#1f2937',
               cursor: 'pointer',
               paddingRight: 4,
             }}
           >
-            <option value="practice">Practice Mode</option>
-            <option value="lessons">Lessons Mode</option>
-            <option value="challenges">Challenges Mode</option>
+            <option value="practice" style={{ backgroundColor: isDark ? '#1e2026' : '#ffffff', color: isDark ? '#f1f5f9' : '#1f2937' }}>
+              Practice Mode
+            </option>
+            <option value="lessons" style={{ backgroundColor: isDark ? '#1e2026' : '#ffffff', color: isDark ? '#f1f5f9' : '#1f2937' }}>
+              Lessons Mode
+            </option>
+            <option value="challenges" style={{ backgroundColor: isDark ? '#1e2026' : '#ffffff', color: isDark ? '#f1f5f9' : '#1f2937' }}>
+              Challenges Mode
+            </option>
           </select>
-          <ChevronDown size={13} color="#6b7280" />
+          <ChevronDown size={13} color={isDark ? '#94a3b8' : '#6b7280'} />
         </div>
       </div>
 
@@ -131,7 +139,10 @@ export const TopBar: React.FC<TopBarProps> = ({
           disabled={!canUndo}
           title="Undo (Ctrl+Z)"
           className="top-btn"
-          style={{ opacity: canUndo ? 1 : 0.4 }}
+          style={{
+            opacity: canUndo ? 1 : 0.4,
+            color: isDark ? '#cbd5e1' : '#4b5563',
+          }}
         >
           <Undo2 size={15} />
         </button>
@@ -140,29 +151,77 @@ export const TopBar: React.FC<TopBarProps> = ({
           disabled={!canRedo}
           title="Redo (Ctrl+Shift+Z)"
           className="top-btn"
-          style={{ opacity: canRedo ? 1 : 0.4 }}
+          style={{
+            opacity: canRedo ? 1 : 0.4,
+            color: isDark ? '#cbd5e1' : '#4b5563',
+          }}
         >
           <Redo2 size={15} />
         </button>
 
-        <div style={{ width: 1, height: 16, backgroundColor: '#e5e7eb', margin: '0 4px' }} />
+        <div style={{ width: 1, height: 16, backgroundColor: isDark ? '#334155' : '#e5e7eb', margin: '0 4px' }} />
 
-        <button onClick={onNew} title="New Drawing" className="top-btn">
+        <button
+          onClick={onNew}
+          title="New Drawing"
+          className="top-btn"
+          style={{ color: isDark ? '#cbd5e1' : '#4b5563' }}
+        >
           <FilePlus size={15} />
         </button>
-        <button onClick={onOpen} title="Open Project (.drawviz)" className="top-btn">
+        <button
+          onClick={onOpen}
+          title="Open Project (.drawviz)"
+          className="top-btn"
+          style={{ color: isDark ? '#cbd5e1' : '#4b5563' }}
+        >
           <FolderOpen size={15} />
         </button>
-        <button onClick={onSave} title="Save Project (.drawviz)" className="top-btn">
+        <button
+          onClick={onSave}
+          title="Save Project (.drawviz)"
+          className="top-btn"
+          style={{ color: isDark ? '#cbd5e1' : '#4b5563' }}
+        >
           <Save size={15} />
         </button>
-        <button onClick={onExportSvg} title="Export SVG" className="top-btn">
+        <button
+          onClick={onExportSvg}
+          title="Export SVG"
+          className="top-btn"
+          style={{ color: isDark ? '#cbd5e1' : '#4b5563' }}
+        >
           <Download size={15} />
         </button>
 
-        <div style={{ width: 1, height: 16, backgroundColor: '#e5e7eb', margin: '0 4px' }} />
+        <div style={{ width: 1, height: 16, backgroundColor: isDark ? '#334155' : '#e5e7eb', margin: '0 4px' }} />
 
-        <button onClick={onOpenSettings} title="Settings & Shortcuts" className="top-btn">
+        {onToggleTheme && (
+          <button
+            onClick={onToggleTheme}
+            title={`Toggle Theme (Current: ${isDark ? 'Dark' : 'Light'})`}
+            className="top-btn"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: isDark ? '#282c34' : '#f1f5f9',
+              border: isDark ? '1px solid #3d4452' : '1px solid #e2e8f0',
+              borderRadius: 5,
+              padding: '4px 6px',
+              cursor: 'pointer',
+            }}
+          >
+            {isDark ? <Moon size={14} color="#38bdf8" /> : <Sun size={14} color="#f59e0b" />}
+          </button>
+        )}
+
+        <button
+          onClick={onOpenSettings}
+          title="Settings & Shortcuts"
+          className="top-btn"
+          style={{ color: isDark ? '#cbd5e1' : '#4b5563' }}
+        >
           <Settings size={15} />
         </button>
       </div>

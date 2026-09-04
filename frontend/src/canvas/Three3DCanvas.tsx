@@ -12,6 +12,8 @@ import {
   SelectionMode,
   Face3D,
   AlignmentMode,
+  ArcBulgeDirection,
+  AppTheme,
 } from '../types/drawing';
 import { IsoplaneType } from '../geometry/isometric';
 import { CursorState } from '../state/drawingState';
@@ -19,6 +21,8 @@ import { cursorStore } from '../state/cursorStore';
 import { extractFacesFromLines } from '../geometry/faces';
 import {
   getArcPoints,
+  getArc3DPoints,
+  getTwoPointArcPoints,
   getCylinderGeometryData,
   logicalToThreeNormal,
   threeToLogicalNormal,
@@ -38,6 +42,14 @@ import {
   ChevronUp,
   Check,
   RefreshCw,
+  MousePointer,
+  PenLine,
+  Circle,
+  Disc,
+  Cylinder,
+  Eraser,
+  Hand,
+  ZoomIn,
 } from 'lucide-react';
 
 interface Three3DCanvasProps {
@@ -52,6 +64,7 @@ interface Three3DCanvasProps {
   selectedFace?: Face3D | null;
   selectionMode?: SelectionMode;
   activeTool: ToolType;
+  onSelectTool?: (tool: ToolType) => void;
   gridSettings: GridSettings;
   activeAnchor: Point3D | null;
   activeElevation?: number;
@@ -74,6 +87,10 @@ interface Three3DCanvasProps {
   onCursorUpdate?: (state: CursorState) => void;
   onSetElevation?: (elevation: number) => void;
   onSetIsoplane?: (isoplane: IsoplaneType) => void;
+  theme?: AppTheme;
+  onToggleTheme?: () => void;
+  onSetTheme?: (theme: AppTheme) => void;
+  onOpenSettings?: () => void;
 }
 
 // Reusable math objects for zero garbage collection
@@ -116,6 +133,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   selectedFace = null,
   selectionMode = 'edge',
   activeTool,
+  onSelectTool,
   gridSettings,
   activeAnchor,
   activeElevation = 0,
@@ -138,7 +156,12 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   onCursorUpdate,
   onSetElevation,
   onSetIsoplane,
+  theme = 'light',
+  onToggleTheme,
+  onSetTheme,
+  onOpenSettings,
 }) => {
+  const isDark = theme === 'dark';
   const mountRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -202,6 +225,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     screen: ScreenPoint;
     type: 'vertex' | 'midpoint' | 'edge' | 'face' | 'grid';
     lineId?: string | null;
+    arcId?: string | null;
     faceData?: Face3D | null;
   } | null>(null);
 
@@ -222,6 +246,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
   // Blender-style Orientation & Operator Control (Full User Control)
   const [alignmentMode, setAlignmentMode] = useState<AlignmentMode>('world-z');
+  const [activeBulgeDir, setActiveBulgeDir] = useState<ArcBulgeDirection>('+z');
   const [lastCreatedEntity, setLastCreatedEntity] = useState<{
     type: 'circle' | 'arc' | 'cylinder';
     id: string;
@@ -232,6 +257,10 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     center: Point3D;
     startAngle?: number;
     endAngle?: number;
+    startPoint?: Point3D;
+    endPoint?: Point3D;
+    bulgeDir?: ArcBulgeDirection;
+    chordDistance?: number;
   } | null>(null);
   const [isOperatorOpen, setIsOperatorOpen] = useState<boolean>(true);
 
@@ -293,8 +322,8 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     const r = 28;
 
     // Outer circle
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
-    ctx.strokeStyle = '#e2e8f0';
+    ctx.fillStyle = theme === 'dark' ? 'rgba(30, 32, 38, 0.75)' : 'rgba(255, 255, 255, 0.75)';
+    ctx.strokeStyle = theme === 'dark' ? '#333a46' : '#e2e8f0';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.arc(center, center, 42, 0, Math.PI * 2);
@@ -420,7 +449,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
     // Scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#f8fafc');
+    scene.background = new THREE.Color(theme === 'dark' ? '#18181b' : '#ffffff');
     sceneRef.current = scene;
 
     // Lighting
@@ -602,8 +631,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         requestRender();
       } else if (
         e.key === 'Delete' ||
-        e.key === 'Backspace' ||
-        (e.key.toLowerCase() === 'x' && !e.ctrlKey && !e.metaKey && !e.altKey)
+        e.key === 'Backspace'
       ) {
         if (selectedCylinderId) {
           e.preventDefault();
@@ -800,20 +828,25 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     const size = 32;
     const divisions = 32;
 
-    const grid = new THREE.GridHelper(size, divisions, 0x94a3b8, 0xe2e8f0);
+    const gridColor1 = theme === 'dark' ? 0x3f3f46 : 0xd4d4d8;
+    const gridColor2 = theme === 'dark' ? 0x27272a : 0xe5e7eb;
+    const grid = new THREE.GridHelper(size, divisions, gridColor1, gridColor2);
 
     const planeGeo = new THREE.PlaneGeometry(size, size);
     const planeMat = new THREE.MeshBasicMaterial({
-      color: 0x6366f1,
+      color: theme === 'dark' ? 0xffffff : 0x000000,
       transparent: true,
-      opacity: 0.04,
+      opacity: 0.015,
       side: THREE.DoubleSide,
       depthWrite: false,
     });
     const planeMesh = new THREE.Mesh(planeGeo, planeMat);
 
     const borderGeo = new THREE.EdgesGeometry(planeGeo);
-    const borderMat = new THREE.LineBasicMaterial({ color: 0x818cf8, linewidth: 1.5 });
+    const borderMat = new THREE.LineBasicMaterial({
+      color: theme === 'dark' ? 0x3f3f46 : 0xd1d5db,
+      linewidth: 1,
+    });
     const borderLines = new THREE.LineSegments(borderGeo, borderMat);
 
     if (activeIsoplane === 'top') {
@@ -845,7 +878,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     gridGroup.add(axesHelper);
 
     requestRender();
-  }, [gridSettings.showGrid, activeIsoplane, activeElevation, requestRender]);
+  }, [gridSettings.showGrid, activeIsoplane, activeElevation, theme, requestRender]);
 
   // -------------------------------------------------------------
   // 5. Render Base 3D Geometry (Lines, Arcs, Solid Faces, Vertex Handles)
@@ -857,8 +890,9 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     geoGroup.clear();
     faceGroup.clear();
 
+    const isDark = theme === 'dark';
     const baseLineMat = new THREE.LineBasicMaterial({
-      color: 0x111827,
+      color: isDark ? 0xf1f5f9 : 0x111827,
       linewidth: 2,
       depthTest: true,
     });
@@ -867,7 +901,9 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     const sphereRadius = isVertexMode ? 0.22 : 0.14;
     const sphereGeo = new THREE.SphereGeometry(sphereRadius, 8, 8);
     const sphereMat = new THREE.MeshBasicMaterial({
-      color: isVertexMode ? 0x6366f1 : 0x4b5563,
+      color: isVertexMode
+        ? (isDark ? 0xf4f4f5 : 0x18181b)
+        : (isDark ? 0xa1a1aa : 0x18181b),
       depthTest: !isVertexMode,
     });
 
@@ -889,38 +925,38 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     });
 
     arcs.forEach((arc) => {
-      const centerThree = logicalToThree(arc.center);
-      const r = arc.radius;
-      let normalThree: THREE.Vector3;
-      if (arc.normal) {
-        normalThree = logicalToThreeNormal(arc.normal);
-      } else if (arc.plane === 'top') {
-        normalThree = new THREE.Vector3(0, 1, 0);
-      } else if (arc.plane === 'front') {
-        normalThree = new THREE.Vector3(0, 0, 1);
-      } else {
-        normalThree = new THREE.Vector3(1, 0, 0);
-      }
-
-      const startDeg = arc.startAngle ?? 0;
-      const endDeg = arc.endAngle ?? 360;
-      const curvePoints = getArcPoints(centerThree, r, normalThree, startDeg, endDeg, 48);
-
+      const curvePoints = getArc3DPoints(arc, 48);
       const curveGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
-      const curveMat = new THREE.LineBasicMaterial({ color: 0x111827, linewidth: 2 });
+      const curveMat = new THREE.LineBasicMaterial({ color: isDark ? 0xf1f5f9 : 0x111827, linewidth: 2 });
       geoGroup.add(new THREE.Line(curveGeo, curveMat));
 
-      const centerGeo = new THREE.SphereGeometry(0.14, 8, 8);
-      const centerMat = new THREE.MeshBasicMaterial({ color: 0x6366f1 });
-      const cMesh = new THREE.Mesh(centerGeo, centerMat);
-      cMesh.position.copy(centerThree);
-      geoGroup.add(cMesh);
+      if (arc.startPoint && arc.endPoint) {
+        const ep1 = logicalToThree(arc.startPoint);
+        const ep2 = logicalToThree(arc.endPoint);
+        const epGeo = new THREE.SphereGeometry(0.14, 8, 8);
+        const epMat = new THREE.MeshBasicMaterial({ color: isDark ? 0x818cf8 : 0x4f46e5 });
+        const m1 = new THREE.Mesh(epGeo, epMat);
+        m1.position.copy(ep1);
+        const m2 = new THREE.Mesh(epGeo, epMat);
+        m2.position.copy(ep2);
+        geoGroup.add(m1);
+        geoGroup.add(m2);
+      } else {
+        const centerThree = logicalToThree(arc.center);
+        const centerGeo = new THREE.SphereGeometry(0.14, 8, 8);
+        const centerMat = new THREE.MeshBasicMaterial({ color: isDark ? 0x818cf8 : 0x6366f1 });
+        const cMesh = new THREE.Mesh(centerGeo, centerMat);
+        cMesh.position.copy(centerThree);
+        geoGroup.add(cMesh);
+      }
     });
 
     const baseFaceMat = new THREE.MeshLambertMaterial({
-      color: solidShading ? 0xffffff : 0xf8fafc,
+      color: isDark
+        ? (solidShading ? 0x27272a : 0x18181b)
+        : (solidShading ? 0xd4d4d8 : 0xf4f4f5),
       transparent: !solidShading,
-      opacity: solidShading ? 1.0 : 0.0,
+      opacity: solidShading ? 0.92 : 0.0,
       side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: 1,
@@ -957,11 +993,13 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
     });
 
-    const extracted = extractFacesFromLines(lines);
+    const extracted = extractFacesFromLines(lines, arcs);
     extractedFacesRef.current = extracted;
 
     extracted.forEach((faceObj) => {
       const v = faceObj.vertices.map(logicalToThree);
+      if (v.length < 3) return;
+
       const faceGeo = new THREE.BufferGeometry();
       if (v.length === 3) {
         const vertices = new Float32Array([
@@ -970,17 +1008,32 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           v[2].x, v[2].y, v[2].z,
         ]);
         faceGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-      } else if (v.length >= 4) {
-        const vertices = new Float32Array([
-          v[0].x, v[0].y, v[0].z,
-          v[1].x, v[1].y, v[1].z,
-          v[2].x, v[2].y, v[2].z,
+      } else {
+        // Robust 2D projection and triangulation for arbitrary N-gons
+        const normThree = faceObj.normal ? logicalToThreeNormal(faceObj.normal) : new THREE.Vector3(0, 1, 0);
+        const u = new THREE.Vector3();
+        if (Math.abs(normThree.y) < 0.9) {
+          u.crossVectors(normThree, new THREE.Vector3(0, 1, 0)).normalize();
+        } else {
+          u.crossVectors(normThree, new THREE.Vector3(1, 0, 0)).normalize();
+        }
+        const w = new THREE.Vector3().crossVectors(normThree, u).normalize();
 
-          v[0].x, v[0].y, v[0].z,
-          v[2].x, v[2].y, v[2].z,
-          v[3].x, v[3].y, v[3].z,
-        ]);
-        faceGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        const pts2D: THREE.Vector2[] = v.map((pt) => new THREE.Vector2(pt.dot(u), pt.dot(w)));
+        const triangles = THREE.ShapeUtils.triangulateShape(pts2D, []);
+
+        const posArray: number[] = [];
+        for (const tri of triangles) {
+          for (const idx of tri) {
+            const pt = v[idx];
+            if (pt) {
+              posArray.push(pt.x, pt.y, pt.z);
+            }
+          }
+        }
+        if (posArray.length > 0) {
+          faceGeo.setAttribute('position', new THREE.Float32BufferAttribute(posArray, 3));
+        }
       }
       faceGeo.computeVertexNormals();
 
@@ -990,7 +1043,16 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     });
 
     requestRender();
-  }, [lines, arcs, cylinders, selectionMode, solidShading, requestRender]);
+  }, [lines, arcs, cylinders, selectionMode, solidShading, theme, requestRender]);
+
+  // Update scene background on theme change
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (scene) {
+      scene.background = new THREE.Color(theme === 'dark' ? '#18181b' : '#ffffff');
+      requestRender();
+    }
+  }, [theme, requestRender]);
 
   // -------------------------------------------------------------
   // 6. Selection Highlights Layer
@@ -1027,20 +1089,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     if (selectedArcId) {
       const arc = arcs.find((a) => a.id === selectedArcId);
       if (arc) {
-        const centerThree = logicalToThree(arc.center);
-        let normalThree: THREE.Vector3;
-        if (arc.normal) {
-          normalThree = logicalToThreeNormal(arc.normal);
-        } else if (arc.plane === 'top') {
-          normalThree = new THREE.Vector3(0, 1, 0);
-        } else if (arc.plane === 'front') {
-          normalThree = new THREE.Vector3(0, 0, 1);
-        } else {
-          normalThree = new THREE.Vector3(1, 0, 0);
-        }
-        const startDeg = arc.startAngle ?? 0;
-        const endDeg = arc.endAngle ?? 360;
-        const pts = getArcPoints(centerThree, arc.radius, normalThree, startDeg, endDeg, 48);
+        const pts = getArc3DPoints(arc, 48);
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
         const mat = new THREE.LineBasicMaterial({ color: 0x4f46e5, linewidth: 3.5, depthTest: false });
         selGroup.add(new THREE.Line(geo, mat));
@@ -1178,14 +1227,29 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
         for (let i = 0; i < arcs.length; i++) {
           const a = arcs[i];
-          _v1.set(a.center.x, a.center.z || 0, a.center.y).project(camera);
-          if (_v1.z <= 1) {
-            const sx = ((_v1.x + 1) * mount.clientWidth) / 2;
-            const sy = ((-_v1.y + 1) * mount.clientHeight) / 2;
-            const dist = Math.hypot(mouseScreen.x - sx, mouseScreen.y - sy);
-            if (dist < minVertexDist) {
-              minVertexDist = dist;
-              closestVertex = a.center;
+          if (a.startPoint && a.endPoint) {
+            for (const pt of [a.startPoint, a.endPoint]) {
+              _v1.set(pt.x, pt.z || 0, pt.y).project(camera);
+              if (_v1.z <= 1) {
+                const sx = ((_v1.x + 1) * mount.clientWidth) / 2;
+                const sy = ((-_v1.y + 1) * mount.clientHeight) / 2;
+                const dist = Math.hypot(mouseScreen.x - sx, mouseScreen.y - sy);
+                if (dist < minVertexDist) {
+                  minVertexDist = dist;
+                  closestVertex = pt;
+                }
+              }
+            }
+          } else {
+            _v1.set(a.center.x, a.center.z || 0, a.center.y).project(camera);
+            if (_v1.z <= 1) {
+              const sx = ((_v1.x + 1) * mount.clientWidth) / 2;
+              const sy = ((-_v1.y + 1) * mount.clientHeight) / 2;
+              const dist = Math.hypot(mouseScreen.x - sx, mouseScreen.y - sy);
+              if (dist < minVertexDist) {
+                minVertexDist = dist;
+                closestVertex = a.center;
+              }
             }
           }
         }
@@ -1206,6 +1270,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       if (snapModes.midpoint) {
         let closestMidpoint: Point3D | null = null;
         let closestLineId: string | null = null;
+        let closestArcId: string | null = null;
         let minMidDist = 14;
 
         for (let i = 0; i < lines.length; i++) {
@@ -1224,6 +1289,27 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
             minMidDist = dist;
             closestMidpoint = { x: midX, y: midY, z: midZ };
             closestLineId = l.id;
+            closestArcId = null;
+          }
+        }
+
+        for (let i = 0; i < arcs.length; i++) {
+          const a = arcs[i];
+          const pts = getArc3DPoints(a, 32);
+          if (pts.length > 0) {
+            const midPtThree = pts[Math.floor(pts.length / 2)];
+            _v1.copy(midPtThree).project(camera);
+            if (_v1.z <= 1) {
+              const sx = ((_v1.x + 1) * mount.clientWidth) / 2;
+              const sy = ((-_v1.y + 1) * mount.clientHeight) / 2;
+              const dist = Math.hypot(mouseScreen.x - sx, mouseScreen.y - sy);
+              if (dist < minMidDist) {
+                minMidDist = dist;
+                closestMidpoint = threeToLogical(midPtThree);
+                closestLineId = null;
+                closestArcId = a.id;
+              }
+            }
           }
         }
 
@@ -1236,6 +1322,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
             screen: { x: sx, y: sy },
             type: 'midpoint' as const,
             lineId: closestLineId,
+            arcId: closestArcId,
           };
         }
       }
@@ -1244,7 +1331,8 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       if (snapModes.edge) {
         let closestEdgePt: Point3D | null = null;
         let closestLineId: string | null = null;
-        let minEdgeDist = 10;
+        let closestArcId: string | null = null;
+        let minEdgeDist = 12;
 
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
@@ -1273,6 +1361,39 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
                 z: Math.round(((line.start.z || 0) + t * ((line.end.z || 0) - (line.start.z || 0))) * 2) / 2,
               };
               closestLineId = line.id;
+              closestArcId = null;
+            }
+          }
+        }
+
+        for (let i = 0; i < arcs.length; i++) {
+          const arc = arcs[i];
+          const pts = getArc3DPoints(arc, 32);
+          for (let j = 0; j < pts.length - 1; j++) {
+            _v1.copy(pts[j]).project(camera);
+            _v2.copy(pts[j + 1]).project(camera);
+            if (_v1.z > 1 || _v2.z > 1) continue;
+
+            const s1x = ((_v1.x + 1) * mount.clientWidth) / 2;
+            const s1y = ((-_v1.y + 1) * mount.clientHeight) / 2;
+            const s2x = ((_v2.x + 1) * mount.clientWidth) / 2;
+            const s2y = ((-_v2.y + 1) * mount.clientHeight) / 2;
+
+            const dx = s2x - s1x;
+            const dy = s2y - s1y;
+            const lenSq = dx * dx + dy * dy;
+            if (lenSq > 0) {
+              const t = Math.max(0, Math.min(1, ((mouseScreen.x - s1x) * dx + (mouseScreen.y - s1y) * dy) / lenSq));
+              const px = s1x + t * dx;
+              const py = s1y + t * dy;
+              const dist = Math.hypot(mouseScreen.x - px, mouseScreen.y - py);
+              if (dist < minEdgeDist) {
+                minEdgeDist = dist;
+                const pt3 = pts[j].clone().lerp(pts[j + 1], t);
+                closestEdgePt = threeToLogical(pt3);
+                closestArcId = arc.id;
+                closestLineId = null;
+              }
             }
           }
         }
@@ -1283,6 +1404,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
             screen: mouseScreen,
             type: 'edge' as const,
             lineId: closestLineId,
+            arcId: closestArcId,
           };
         }
       }
@@ -1467,26 +1589,35 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         const rMat = new THREE.LineBasicMaterial({ color: 0x818cf8 });
         prevGroup.add(new THREE.Line(rGeo, rMat));
       } else if (activeTool === 'arc' && activeAnchorRef.current) {
-        const centerThree = logicalToThree(activeAnchorRef.current);
-        const radius = Math.max(1, Math.round(centerThree.distanceTo(snapPos)));
-        const normThree = logicalToThreeNormal(activeNormalRef.current);
-        // Half Arc: 180° semicircle
-        const points = getArcPoints(centerThree, radius, normThree, 0, 180, 48);
+        const p1Three = logicalToThree(activeAnchorRef.current);
+        const p2Three = snapPos;
+        const chordDist = p1Three.distanceTo(p2Three);
 
-        const arcGeo = new THREE.BufferGeometry().setFromPoints(points);
-        const arcMat = new THREE.LineDashedMaterial({
-          color: 0x4f46e5,
-          dashSize: 0.5,
-          gapSize: 0.25,
-        });
-        const arcLine = new THREE.Line(arcGeo, arcMat);
-        arcLine.computeLineDistances();
-        prevGroup.add(arcLine);
+        if (chordDist > 0.05) {
+          // Default preview radius: 2 * distance between points (per user specification)
+          const defaultR = Math.max(1, Math.round(chordDist * 2));
+          const arcRes = getTwoPointArcPoints(p1Three, p2Three, defaultR, activeBulgeDir, 48);
 
-        // Baseline across the half arc diameter
-        if (points.length >= 2) {
-          const dGeo = new THREE.BufferGeometry().setFromPoints([points[0], points[points.length - 1]]);
+          const arcGeo = new THREE.BufferGeometry().setFromPoints(arcRes.points);
+          const arcMat = new THREE.LineDashedMaterial({
+            color: 0x4f46e5,
+            dashSize: 0.5,
+            gapSize: 0.25,
+          });
+          const arcLine = new THREE.Line(arcGeo, arcMat);
+          arcLine.computeLineDistances();
+          prevGroup.add(arcLine);
+
+          // Straight chord line connecting the two vertices
+          const dGeo = new THREE.BufferGeometry().setFromPoints([p1Three, p2Three]);
           prevGroup.add(new THREE.Line(dGeo, new THREE.LineBasicMaterial({ color: 0x818cf8 })));
+
+          // Small apex indicator dot
+          const apexGeo = new THREE.SphereGeometry(0.12, 8, 8);
+          const apexMat = new THREE.MeshBasicMaterial({ color: 0x6366f1 });
+          const apexMesh = new THREE.Mesh(apexGeo, apexMat);
+          apexMesh.position.copy(arcRes.apex);
+          prevGroup.add(apexMesh);
         }
       } else if (activeTool === 'cylinder') {
         const cDraft = cylinderDraftRef.current;
@@ -1669,7 +1800,48 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         return;
       }
 
-      if (activeTool === 'circle' || activeTool === 'arc' || activeTool === 'cylinder') {
+      if (activeTool === 'arc') {
+        let newDir: ArcBulgeDirection | null = null;
+        if (key === 'z') {
+          newDir = e.shiftKey ? '-z' : (activeBulgeDir === '+z' ? '-z' : '+z');
+        } else if (key === 'y') {
+          newDir = e.shiftKey ? '-y' : (activeBulgeDir === '+y' ? '-y' : '+y');
+        } else if (key === 'x') {
+          newDir = e.shiftKey ? '-x' : (activeBulgeDir === '+x' ? '-x' : '+x');
+        }
+
+        if (newDir) {
+          e.preventDefault();
+          setActiveBulgeDir(newDir);
+          if (lastCreatedEntity && lastCreatedEntity.type === 'arc') {
+            handleOperatorUpdate({ bulgeDir: newDir });
+          }
+          requestRender();
+          return;
+        }
+
+        // Radius +/- shortcuts
+        if (key === '+' || key === '=') {
+          if (lastCreatedEntity && lastCreatedEntity.type === 'arc') {
+            e.preventDefault();
+            handleOperatorUpdate({ radius: lastCreatedEntity.radius + 1 });
+            return;
+          }
+        } else if (key === '-' || key === '_') {
+          if (lastCreatedEntity && lastCreatedEntity.type === 'arc') {
+            e.preventDefault();
+            handleOperatorUpdate({ radius: Math.max(1, lastCreatedEntity.radius - 1) });
+            return;
+          }
+        } else if (key === 'p' || key === 's') {
+          if (lastCreatedEntity && lastCreatedEntity.type === 'arc' && lastCreatedEntity.chordDistance) {
+            e.preventDefault();
+            // π Semicircle preset: R = D/2
+            handleOperatorUpdate({ radius: Math.max(1, Math.round(lastCreatedEntity.chordDistance / 2)) });
+            return;
+          }
+        }
+      } else if (activeTool === 'circle' || activeTool === 'cylinder') {
         if (key === 'z') {
           switchAlignmentMode('world-z');
         } else if (key === 'y') {
@@ -1688,6 +1860,8 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     activeTool,
+    activeBulgeDir,
+    lastCreatedEntity,
     selectedArcId,
     arcs,
     activeLayerId,
@@ -1703,6 +1877,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   const handleOperatorUpdate = useCallback(
     (updates: {
       alignmentMode?: AlignmentMode;
+      bulgeDir?: ArcBulgeDirection;
       radius?: number;
       height?: number;
       invertNormal?: boolean;
@@ -1712,6 +1887,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       const newRadius = updates.radius !== undefined ? Math.max(1, updates.radius) : lastCreatedEntity.radius;
       const newHeight = updates.height !== undefined ? Math.max(1, updates.height) : (lastCreatedEntity.height ?? 5);
       const newAlign = updates.alignmentMode ?? lastCreatedEntity.alignmentMode;
+      const newBulgeDir = updates.bulgeDir ?? lastCreatedEntity.bulgeDir ?? activeBulgeDir;
       let newNormal = { ...lastCreatedEntity.normal };
 
       if (updates.alignmentMode) {
@@ -1735,11 +1911,27 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       } else if (lastCreatedEntity.type === 'circle' || lastCreatedEntity.type === 'arc') {
         const existing = arcs.find((a) => a.id === lastCreatedEntity.id);
         if (existing) {
-          const updated: DrawingArc = {
-            ...existing,
-            radius: newRadius,
-            normal: newNormal,
-          };
+          let updated: DrawingArc;
+          if (lastCreatedEntity.startPoint && lastCreatedEntity.endPoint) {
+            const p1Three = logicalToThree(lastCreatedEntity.startPoint);
+            const p2Three = logicalToThree(lastCreatedEntity.endPoint);
+            const calcRes = getTwoPointArcPoints(p1Three, p2Three, newRadius, newBulgeDir, 48);
+            newNormal = threeToLogicalNormal(calcRes.normal);
+            updated = {
+              ...existing,
+              radius: calcRes.actualRadius,
+              center: threeToLogical(calcRes.center),
+              normal: newNormal,
+              bulgeDir: newBulgeDir,
+              endAngle: Math.round((calcRes.subtendedAngle * 180) / Math.PI),
+            };
+          } else {
+            updated = {
+              ...existing,
+              radius: newRadius,
+              normal: newNormal,
+            };
+          }
           onUpdateArc?.(updated);
         }
       }
@@ -1752,12 +1944,16 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
               height: newHeight,
               normal: newNormal,
               alignmentMode: newAlign,
+              bulgeDir: newBulgeDir,
             }
           : null
       );
+      if (updates.bulgeDir) {
+        setActiveBulgeDir(updates.bulgeDir);
+      }
       requestRender();
     },
-    [lastCreatedEntity, cylinders, arcs, getDraftingNormal, onUpdateCylinder, onUpdateArc, requestRender]
+    [lastCreatedEntity, activeBulgeDir, cylinders, arcs, getDraftingNormal, onUpdateCylinder, onUpdateArc, requestRender]
   );
 
   // -------------------------------------------------------------
@@ -1809,24 +2005,43 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         opacity: 0.25,
         side: THREE.DoubleSide,
       })));
-    } else if (snap.type === 'edge' && snap.lineId) {
-      const line = lines.find((l) => l.id === snap.lineId);
-      if (line) {
-        const v1 = logicalToThree(line.start);
-        const v2 = logicalToThree(line.end);
-        const geo = new THREE.BufferGeometry().setFromPoints([v1, v2]);
-        hlGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
-          color: 0x06b6d4,
-          linewidth: 3,
-          depthTest: false,
-        })));
+    } else if (snap.type === 'edge') {
+      if (snap.lineId) {
+        const line = lines.find((l) => l.id === snap.lineId);
+        if (line) {
+          const v1 = logicalToThree(line.start);
+          const v2 = logicalToThree(line.end);
+          const geo = new THREE.BufferGeometry().setFromPoints([v1, v2]);
+          hlGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
+            color: 0x06b6d4,
+            linewidth: 3,
+            depthTest: false,
+          })));
+        }
+      } else if (snap.arcId) {
+        const arc = arcs.find((a) => a.id === snap.arcId);
+        if (arc) {
+          const pts = getArc3DPoints(arc, 48);
+          const geo = new THREE.BufferGeometry().setFromPoints(pts);
+          hlGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
+            color: 0x06b6d4,
+            linewidth: 3,
+            depthTest: false,
+          })));
+        }
       }
     }
 
     // Direct DOM Tooltip update (0 React re-renders)
-    // Direct DOM Tooltip update (0 React re-renders)
     if (tooltipRef.current) {
       let tag = `X:${snap.logical.x} Y:${snap.logical.y} Z:${snap.logical.z || 0} • [${snap.type.toUpperCase()}]`;
+      if (snap.type === 'edge') {
+        if (snap.arcId) {
+          tag = `Arc Edge • ${tag}`;
+        } else if (snap.lineId) {
+          tag = `Line Edge • ${tag}`;
+        }
+      }
       if (activeTool === 'circle' && activeAnchorRef.current) {
         const vStart = logicalToThree(activeAnchorRef.current);
         const vCur = logicalToThree(snap.logical);
@@ -1835,8 +2050,9 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       } else if (activeTool === 'arc' && activeAnchorRef.current) {
         const vStart = logicalToThree(activeAnchorRef.current);
         const vCur = logicalToThree(snap.logical);
-        const r = Math.max(1, Math.round(vStart.distanceTo(vCur)));
-        tag = `Half Arc (180°) R:${r} • ${tag}`;
+        const d = Math.round(vStart.distanceTo(vCur) * 10) / 10;
+        const r = Math.max(1, Math.round(d * 2));
+        tag = `Arc Dist:${d} R:${r} (${activeBulgeDir.toUpperCase()}) • ${tag}`;
       } else if (activeTool === 'cylinder') {
         const cDraft = cylinderDraftRef.current;
         if (cDraft.step === 1 && activeAnchorRef.current) {
@@ -1947,21 +2163,30 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
     } else if (activeTool === 'arc') {
       if (!activeAnchorRef.current) {
-        const targetNormal = getDraftingNormal(alignmentMode, snap.logical, snap.faceData);
-        activeNormalRef.current = targetNormal;
         onSetAnchor(snap.logical);
       } else {
-        const vStart = logicalToThree(activeAnchorRef.current);
-        const vCur = logicalToThree(snap.logical);
-        const radius = Math.max(1, Math.round(vStart.distanceTo(vCur)));
+        const p1Three = logicalToThree(activeAnchorRef.current);
+        const p2Three = logicalToThree(snap.logical);
+        const chordDist = p1Three.distanceTo(p2Three);
+
+        if (chordDist < 0.05) {
+          return;
+        }
+
+        // Default radius: 2 * distance between points (per user specification)
+        const defaultRadius = Math.max(1, Math.round(chordDist * 2));
+        const calcRes = getTwoPointArcPoints(p1Three, p2Three, defaultRadius, activeBulgeDir, 48);
 
         const newArc: DrawingArc = {
           id: `arc-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          center: { ...activeAnchorRef.current },
-          radius,
-          normal: { ...activeNormalRef.current },
+          center: threeToLogical(calcRes.center),
+          radius: calcRes.actualRadius,
+          normal: threeToLogicalNormal(calcRes.normal),
+          startPoint: { ...activeAnchorRef.current },
+          endPoint: { ...snap.logical },
+          bulgeDir: activeBulgeDir,
           startAngle: 0,
-          endAngle: 180, // Half Arc!
+          endAngle: Math.round((calcRes.subtendedAngle * 180) / Math.PI),
           plane: activeIsoplane,
           layerId: activeLayerId,
           style: { stroke: '#111827', strokeWidth: 1.75, lineType: 'solid' },
@@ -1971,11 +2196,13 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           type: 'arc',
           id: newArc.id,
           radius: newArc.radius,
-          normal: { ...activeNormalRef.current },
+          normal: { ...threeToLogicalNormal(calcRes.normal) },
           alignmentMode,
           center: newArc.center,
-          startAngle: 0,
-          endAngle: 180,
+          startPoint: newArc.startPoint,
+          endPoint: newArc.endPoint,
+          bulgeDir: activeBulgeDir,
+          chordDistance: Math.round(chordDist * 10) / 10,
         });
         setIsOperatorOpen(true);
         onSetAnchor(null);
@@ -2039,7 +2266,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         onSetAnchor(null);
       }
     } else if (activeTool === 'select' || activeTool === 'eraser') {
-      if (selectionMode === 'vertex' || snap.type === 'vertex') {
+      if (selectionMode === 'vertex') {
         if (snap.type === 'vertex') {
           onSelectVertex?.(snap.logical);
           onSelectLine(null);
@@ -2049,7 +2276,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         } else {
           onSelectVertex?.(null);
         }
-      } else if (selectionMode === 'face' || snap.type === 'face') {
+      } else if (selectionMode === 'face') {
         if (snap.type === 'face' && snap.faceData) {
           onSelectFace?.(snap.faceData);
           onSelectLine(null);
@@ -2060,17 +2287,79 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           onSelectFace?.(null);
         }
       } else {
-        let hitLineId = snap.lineId || null;
-        let hitArcId: string | null = null;
+        // selectionMode === 'edge' (or default edge selection)
+        let hitLineId = (snap.type === 'edge' ? snap.lineId : null) || null;
+        let hitArcId = (snap.type === 'edge' ? snap.arcId : null) || null;
         let hitCylinderId: string | null = null;
 
-        if (!hitLineId) {
-          arcs.forEach((arc) => {
-            const cThree = logicalToThree(arc.center);
-            const clickThree = logicalToThree(snap.logical);
-            const dist = Math.abs(clickThree.distanceTo(cThree) - arc.radius);
-            if (dist < 1.5) hitArcId = arc.id;
-          });
+        // Fallback: If not snapped directly to an edge, perform a screen-space distance search
+        // against all lines and arcs with a generous 16px radius around click!
+        if (!hitLineId && !hitArcId) {
+          const mount = mountRef.current;
+          const camera = activeCameraRef.current;
+          if (mount && camera) {
+            const rect = mount.getBoundingClientRect();
+            const clickScreenX = e.clientX - rect.left;
+            const clickScreenY = e.clientY - rect.top;
+            let closestDist = 16; // 16px threshold for click selection
+
+            // Check lines
+            for (const line of lines) {
+              _v1.set(line.start.x, line.start.z || 0, line.start.y).project(camera);
+              _v2.set(line.end.x, line.end.z || 0, line.end.y).project(camera);
+              if (_v1.z > 1 || _v2.z > 1) continue;
+
+              const s1x = ((_v1.x + 1) * mount.clientWidth) / 2;
+              const s1y = ((-_v1.y + 1) * mount.clientHeight) / 2;
+              const s2x = ((_v2.x + 1) * mount.clientWidth) / 2;
+              const s2y = ((-_v2.y + 1) * mount.clientHeight) / 2;
+
+              const dx = s2x - s1x;
+              const dy = s2y - s1y;
+              const lenSq = dx * dx + dy * dy;
+              if (lenSq > 0) {
+                const t = Math.max(0, Math.min(1, ((clickScreenX - s1x) * dx + (clickScreenY - s1y) * dy) / lenSq));
+                const px = s1x + t * dx;
+                const py = s1y + t * dy;
+                const d = Math.hypot(clickScreenX - px, clickScreenY - py);
+                if (d < closestDist) {
+                  closestDist = d;
+                  hitLineId = line.id;
+                  hitArcId = null;
+                }
+              }
+            }
+
+            // Check arcs
+            for (const arc of arcs) {
+              const pts = getArc3DPoints(arc, 36);
+              for (let j = 0; j < pts.length - 1; j++) {
+                _v1.copy(pts[j]).project(camera);
+                _v2.copy(pts[j + 1]).project(camera);
+                if (_v1.z > 1 || _v2.z > 1) continue;
+
+                const s1x = ((_v1.x + 1) * mount.clientWidth) / 2;
+                const s1y = ((-_v1.y + 1) * mount.clientHeight) / 2;
+                const s2x = ((_v2.x + 1) * mount.clientWidth) / 2;
+                const s2y = ((-_v2.y + 1) * mount.clientHeight) / 2;
+
+                const dx = s2x - s1x;
+                const dy = s2y - s1y;
+                const lenSq = dx * dx + dy * dy;
+                if (lenSq > 0) {
+                  const t = Math.max(0, Math.min(1, ((clickScreenX - s1x) * dx + (clickScreenY - s1y) * dy) / lenSq));
+                  const px = s1x + t * dx;
+                  const py = s1y + t * dy;
+                  const d = Math.hypot(clickScreenX - px, clickScreenY - py);
+                  if (d < closestDist) {
+                    closestDist = d;
+                    hitArcId = arc.id;
+                    hitLineId = null;
+                  }
+                }
+              }
+            }
+          }
         }
 
         if (!hitLineId && !hitArcId) {
@@ -2206,6 +2495,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         position: 'relative',
         overflow: 'hidden',
         userSelect: 'none',
+        backgroundColor: theme === 'dark' ? '#1e2026' : '#eef1f5',
       }}
       onContextMenu={handleContextMenu}
     >
@@ -2219,332 +2509,370 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         style={{ width: '100%', height: '100%', display: 'block', cursor: 'crosshair' }}
       />
 
-      {/* Blender-Style Viewport Badge (Top-Left) */}
+      {/* Minimal Blender-Style Viewport Badge (Top-Left) */}
+      {/* ============================================================ */}
+      {/* 1. Blender-Style Top Viewport Header Bar                     */}
+      {/* ============================================================ */}
+      {/* ============================================================ */}
+      {/* 1. Monochromatic Top Floating Viewport Control Bar           */}
+      {/* ============================================================ */}
       <div
         style={{
           position: 'absolute',
           top: 12,
           left: 14,
-          zIndex: 25,
-          pointerEvents: 'none',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-        }}
-      >
-        <span
-          ref={badgeRef}
-          style={{
-            fontSize: 12,
-            fontWeight: 700,
-            color: '#475569',
-            letterSpacing: '0.04em',
-            textShadow: '0 1px 2px rgba(255,255,255,0.8)',
-          }}
-        >
-          {viewBadgeText}
-        </span>
-        <span style={{ fontSize: 10, color: '#94a3b8' }}>
-          Elevation: Z = {activeElevation >= 0 ? `+${activeElevation}` : activeElevation} &bull; Plane: {activeIsoplane.toUpperCase()}
-        </span>
-      </div>
-
-      {/* Blender-Style Top Controls Toolbar */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 48,
-          left: 14,
           display: 'flex',
           alignItems: 'center',
-          gap: 6,
-          backgroundColor: 'rgba(255, 255, 255, 0.94)',
-          backdropFilter: 'blur(8px)',
-          border: '1px solid #e5e7eb',
-          borderRadius: 8,
-          padding: '3px 6px',
-          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.06)',
+          gap: 8,
           zIndex: 30,
+          pointerEvents: 'auto',
+          userSelect: 'none',
         }}
       >
-        {/* 1. Selection Mode (1, 2, 3) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+        {/* Pill 1: Vertex / Edge / Face Selection Mode */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            backgroundColor: isDark ? '#27272a' : '#ffffff',
+            borderRadius: 6,
+            border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            padding: 3,
+            gap: 2,
+            height: 32,
+          }}
+        >
           <button
             onClick={() => onSetSelectionMode?.('vertex')}
             title="Vertex Select (Key: 1)"
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 3,
-              padding: '4px 7px',
-              fontSize: 11,
-              fontWeight: selectionMode === 'vertex' ? 700 : 500,
-              color: selectionMode === 'vertex' ? '#ffffff' : '#4b5563',
-              backgroundColor: selectionMode === 'vertex' ? '#4f46e5' : 'transparent',
+              gap: 4,
+              padding: '0 8px',
+              height: 24,
+              borderRadius: 4,
               border: 'none',
-              borderRadius: 5,
+              backgroundColor: selectionMode === 'vertex' ? (isDark ? '#f4f4f5' : '#18181b') : 'transparent',
+              color: selectionMode === 'vertex' ? (isDark ? '#18181b' : '#ffffff') : (isDark ? '#a1a1aa' : '#4b5563'),
+              fontSize: 11,
+              fontWeight: selectionMode === 'vertex' ? 600 : 500,
               cursor: 'pointer',
+              transition: 'all 0.1s ease',
             }}
           >
-            <Dot size={15} strokeWidth={3} />
+            <span style={{ fontSize: 13, lineHeight: 1 }}>•</span>
             <span>Vertex</span>
           </button>
-
           <button
             onClick={() => onSetSelectionMode?.('edge')}
             title="Edge Select (Key: 2)"
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 3,
-              padding: '4px 7px',
-              fontSize: 11,
-              fontWeight: selectionMode === 'edge' ? 700 : 500,
-              color: selectionMode === 'edge' ? '#ffffff' : '#4b5563',
-              backgroundColor: selectionMode === 'edge' ? '#4f46e5' : 'transparent',
+              padding: '0 10px',
+              height: 24,
+              borderRadius: 4,
               border: 'none',
-              borderRadius: 5,
+              backgroundColor: selectionMode === 'edge' ? (isDark ? '#f4f4f5' : '#18181b') : 'transparent',
+              color: selectionMode === 'edge' ? (isDark ? '#18181b' : '#ffffff') : (isDark ? '#a1a1aa' : '#4b5563'),
+              fontSize: 11,
+              fontWeight: selectionMode === 'edge' ? 600 : 500,
               cursor: 'pointer',
+              transition: 'all 0.1s ease',
             }}
           >
-            <Minus size={13} strokeWidth={2.5} />
             <span>Edge</span>
           </button>
-
           <button
             onClick={() => onSetSelectionMode?.('face')}
             title="Face Select (Key: 3)"
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 3,
-              padding: '4px 7px',
-              fontSize: 11,
-              fontWeight: selectionMode === 'face' ? 700 : 500,
-              color: selectionMode === 'face' ? '#ffffff' : '#4b5563',
-              backgroundColor: selectionMode === 'face' ? '#4f46e5' : 'transparent',
+              padding: '0 10px',
+              height: 24,
+              borderRadius: 4,
               border: 'none',
-              borderRadius: 5,
+              backgroundColor: selectionMode === 'face' ? (isDark ? '#f4f4f5' : '#18181b') : 'transparent',
+              color: selectionMode === 'face' ? (isDark ? '#18181b' : '#ffffff') : (isDark ? '#a1a1aa' : '#4b5563'),
+              fontSize: 11,
+              fontWeight: selectionMode === 'face' ? 600 : 500,
               cursor: 'pointer',
+              transition: 'all 0.1s ease',
             }}
           >
-            <Square size={12} strokeWidth={2} />
             <span>Face</span>
           </button>
         </div>
 
-        <div style={{ width: 1, height: 16, backgroundColor: '#e5e7eb' }} />
-
-        {/* Elevation Z (Q / E) Stepper */}
+        {/* Pill 2: Elevation Z Stepper */}
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 2,
-            backgroundColor: '#f8fafc',
+            backgroundColor: isDark ? '#27272a' : '#ffffff',
             borderRadius: 6,
-            padding: '2px 4px',
-            border: '1px solid #e2e8f0',
+            border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            padding: '0 4px',
+            height: 32,
+            gap: 3,
           }}
-          title="Elevate drawing height along Z-axis (Keys: Q to lower, E to raise)"
         >
-          <button
-            onClick={() => handleStepElevation(-1)}
-            title="Lower Elevation Z by 1 (Key: Q)"
+          <span
             style={{
-              padding: '2px 5px',
-              fontSize: 10,
-              fontWeight: 700,
-              color: '#475569',
-              backgroundColor: '#ffffff',
-              border: '1px solid #cbd5e1',
-              borderRadius: 4,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
+              fontSize: 11,
+              fontWeight: 600,
+              color: isDark ? '#f4f4f5' : '#18181b',
+              fontFamily: 'monospace',
+              padding: '0 6px',
             }}
+            title="Elevation Z (Q / E to change)"
           >
-            <kbd style={{ fontSize: 9, fontWeight: 800, color: '#6366f1' }}>Q</kbd>
-            <span>-</span>
-          </button>
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#1e293b', minWidth: 44, textAlign: 'center' }}>
             Z: {activeElevation >= 0 ? `+${activeElevation}` : activeElevation}
           </span>
           <button
             onClick={() => handleStepElevation(1)}
-            title="Raise Elevation Z by 1 (Key: E)"
+            title="Raise Elevation (+1) [Key: E]"
             style={{
-              padding: '2px 5px',
-              fontSize: 10,
-              fontWeight: 700,
-              color: '#475569',
-              backgroundColor: '#ffffff',
-              border: '1px solid #cbd5e1',
-              borderRadius: 4,
-              cursor: 'pointer',
+              width: 22,
+              height: 22,
               display: 'flex',
               alignItems: 'center',
-              gap: 2,
+              justifyContent: 'center',
+              borderRadius: 4,
+              border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+              backgroundColor: isDark ? '#18181b' : '#f9fafb',
+              color: isDark ? '#f4f4f5' : '#18181b',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
             }}
           >
-            <span>+</span>
-            <kbd style={{ fontSize: 9, fontWeight: 800, color: '#6366f1' }}>E</kbd>
+            +
+          </button>
+          <button
+            onClick={() => handleStepElevation(-1)}
+            title="Lower Elevation (-1) [Key: Q]"
+            style={{
+              width: 22,
+              height: 22,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 4,
+              border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+              backgroundColor: isDark ? '#18181b' : '#f9fafb',
+              color: isDark ? '#f4f4f5' : '#18181b',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            -
           </button>
         </div>
 
-        <div style={{ width: 1, height: 16, backgroundColor: '#e5e7eb' }} />
-
-        {/* 2. Blender Magnet Snapping Switch */}
-        <button
-          onClick={() => setMagnetSnapEnabled((prev) => !prev)}
-          title={`Magnet Snapping: ${magnetSnapEnabled ? 'ON' : 'OFF'} (Shift + Tab | Hold Ctrl to Invert)`}
+        {/* Pill 3: Snapping Controls */}
+        <div
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 4,
-            padding: '4px 8px',
-            fontSize: 11,
-            fontWeight: 600,
-            color: magnetSnapEnabled ? '#4f46e5' : '#6b7280',
-            backgroundColor: magnetSnapEnabled ? '#eef2ff' : 'transparent',
-            border: 'none',
-            borderRadius: 5,
-            cursor: 'pointer',
+            backgroundColor: isDark ? '#27272a' : '#ffffff',
+            borderRadius: 6,
+            border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            padding: '0 4px',
+            height: 32,
+            gap: 3,
           }}
         >
-          <Magnet size={13} strokeWidth={2.2} />
-          <span>Snap {magnetSnapEnabled ? 'ON' : 'OFF'}</span>
-        </button>
-
-        {/* Snap Targets Toggle Pills */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: 10 }}>
+          <button
+            onClick={() => setMagnetSnapEnabled((p) => !p)}
+            title={`Snap: ${magnetSnapEnabled ? 'ON' : 'OFF'} (Shift+Tab)`}
+            style={{
+              padding: '0 8px',
+              height: 24,
+              borderRadius: 4,
+              border: 'none',
+              backgroundColor: 'transparent',
+              color: magnetSnapEnabled ? (isDark ? '#f4f4f5' : '#18181b') : (isDark ? '#71717a' : '#9ca3af'),
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Snap: <span style={{ fontWeight: 700 }}>{magnetSnapEnabled ? 'ON' : 'OFF'}</span>
+          </button>
+          <div style={{ width: 1, height: 14, backgroundColor: isDark ? '#3f3f46' : '#e5e7eb' }} />
           <button
             onClick={() => setSnapModes((p) => ({ ...p, vertex: !p.vertex }))}
             title="Snap to Vertex"
             style={{
-              padding: '2px 5px',
-              borderRadius: 3,
+              padding: '0 6px',
+              height: 22,
+              borderRadius: 4,
               border: 'none',
+              backgroundColor: snapModes.vertex ? (isDark ? '#3f3f46' : '#f3f4f6') : 'transparent',
+              color: snapModes.vertex ? (isDark ? '#f4f4f5' : '#18181b') : (isDark ? '#71717a' : '#9ca3af'),
+              fontSize: 11,
+              fontWeight: snapModes.vertex ? 600 : 400,
               cursor: 'pointer',
-              fontWeight: snapModes.vertex ? 700 : 400,
-              color: snapModes.vertex ? '#b45309' : '#9ca3af',
-              backgroundColor: snapModes.vertex ? '#fef3c7' : 'transparent',
             }}
           >
             V
           </button>
           <button
             onClick={() => setSnapModes((p) => ({ ...p, midpoint: !p.midpoint }))}
-            title="Snap to Edge Midpoint"
+            title="Snap to Midpoint"
             style={{
-              padding: '2px 5px',
-              borderRadius: 3,
+              padding: '0 6px',
+              height: 22,
+              borderRadius: 4,
               border: 'none',
+              backgroundColor: snapModes.midpoint ? (isDark ? '#3f3f46' : '#f3f4f6') : 'transparent',
+              color: snapModes.midpoint ? (isDark ? '#f4f4f5' : '#18181b') : (isDark ? '#71717a' : '#9ca3af'),
+              fontSize: 11,
+              fontWeight: snapModes.midpoint ? 600 : 400,
               cursor: 'pointer',
-              fontWeight: snapModes.midpoint ? 700 : 400,
-              color: snapModes.midpoint ? '#0e7490' : '#9ca3af',
-              backgroundColor: snapModes.midpoint ? '#cffafe' : 'transparent',
             }}
           >
             Mid
           </button>
           <button
             onClick={() => setSnapModes((p) => ({ ...p, edge: !p.edge }))}
-            title="Snap to Edge Line"
+            title="Snap to Edge"
             style={{
-              padding: '2px 5px',
-              borderRadius: 3,
+              padding: '0 6px',
+              height: 22,
+              borderRadius: 4,
               border: 'none',
+              backgroundColor: snapModes.edge ? (isDark ? '#3f3f46' : '#f3f4f6') : 'transparent',
+              color: snapModes.edge ? (isDark ? '#f4f4f5' : '#18181b') : (isDark ? '#71717a' : '#9ca3af'),
+              fontSize: 11,
+              fontWeight: snapModes.edge ? 600 : 400,
               cursor: 'pointer',
-              fontWeight: snapModes.edge ? 700 : 400,
-              color: snapModes.edge ? '#0e7490' : '#9ca3af',
-              backgroundColor: snapModes.edge ? '#cffafe' : 'transparent',
             }}
           >
             Edge
           </button>
           <button
             onClick={() => setSnapModes((p) => ({ ...p, face: !p.face }))}
-            title="Snap to Face Surface"
+            title="Snap to Face"
             style={{
-              padding: '2px 5px',
-              borderRadius: 3,
+              padding: '0 6px',
+              height: 22,
+              borderRadius: 4,
               border: 'none',
+              backgroundColor: snapModes.face ? (isDark ? '#3f3f46' : '#f3f4f6') : 'transparent',
+              color: snapModes.face ? (isDark ? '#f4f4f5' : '#18181b') : (isDark ? '#71717a' : '#9ca3af'),
+              fontSize: 11,
+              fontWeight: snapModes.face ? 600 : 400,
               cursor: 'pointer',
-              fontWeight: snapModes.face ? 700 : 400,
-              color: snapModes.face ? '#6d28d9' : '#9ca3af',
-              backgroundColor: snapModes.face ? '#ede9fe' : 'transparent',
             }}
           >
             Face
           </button>
         </div>
 
-        <div style={{ width: 1, height: 16, backgroundColor: '#e5e7eb' }} />
-
-        {/* 3. Shading Mode */}
-        <button
-          onClick={() => setSolidShading(!solidShading)}
-          title="Toggle Solid CAD Shading vs Wireframe"
+        {/* Pill 4: Shading & Projection */}
+        <div
           style={{
-            padding: '4px 6px',
-            fontSize: 11,
-            fontWeight: 600,
-            color: solidShading ? '#4f46e5' : '#6b7280',
-            backgroundColor: solidShading ? '#eef2ff' : 'transparent',
-            border: 'none',
-            borderRadius: 4,
-            cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
+            backgroundColor: isDark ? '#27272a' : '#ffffff',
+            borderRadius: 6,
+            border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            padding: 3,
             gap: 3,
+            height: 32,
           }}
         >
-          <Layers size={13} />
-          <span>{solidShading ? 'Solid' : 'Wire'}</span>
-        </button>
+          <button
+            onClick={() => setSolidShading(!solidShading)}
+            title={`Viewport Shading: ${solidShading ? 'Solid' : 'Wireframe'}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '0 8px',
+              height: 24,
+              borderRadius: 4,
+              border: 'none',
+              backgroundColor: solidShading ? (isDark ? '#3f3f46' : '#f3f4f6') : 'transparent',
+              color: isDark ? '#f4f4f5' : '#181a20',
+              fontSize: 11,
+              fontWeight: solidShading ? 600 : 500,
+              cursor: 'pointer',
+            }}
+          >
+            <Box size={13} strokeWidth={2.2} />
+            <span>Solid</span>
+          </button>
+          <button
+            onClick={togglePerspective}
+            title="Toggle Perspective / Orthographic (Numpad 5)"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '0 8px',
+              height: 24,
+              borderRadius: 4,
+              border: 'none',
+              backgroundColor: 'transparent',
+              color: isDark ? '#f4f4f5' : '#181a20',
+              fontSize: 11,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            <Box size={13} strokeWidth={1.7} />
+            <span>{isPerspective ? 'Persp' : 'Ortho'}</span>
+          </button>
+        </div>
 
-        {/* 4. Perspective / Ortho Toggle (Numpad 5) */}
-        <button
-          onClick={togglePerspective}
-          title="Toggle Perspective / Orthographic Projection (Numpad 5)"
+        {/* Pill 5: Maximize / Fullscreen Viewport */}
+        <div
           style={{
-            padding: '4px 6px',
-            fontSize: 11,
-            fontWeight: 600,
-            color: isPerspective ? '#4f46e5' : '#4b5563',
-            backgroundColor: isPerspective ? '#eef2ff' : 'transparent',
-            border: 'none',
-            borderRadius: 4,
-            cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: 3,
+            backgroundColor: isDark ? '#27272a' : '#ffffff',
+            borderRadius: 6,
+            border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            padding: 3,
+            height: 32,
           }}
         >
-          <Box size={13} />
-          <span>{isPerspective ? 'Persp' : 'Ortho'}</span>
-        </button>
-
-        {/* 5. Frame All (Numpad .) */}
-        <button
-          onClick={frameAll}
-          title="Frame All Geometry (Numpad . | F | Home)"
-          style={{
-            padding: '4px 6px',
-            fontSize: 11,
-            color: '#6b7280',
-            backgroundColor: 'transparent',
-            border: 'none',
-            borderRadius: 4,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-          }}
-        >
-          <Maximize2 size={13} />
-        </button>
+          <button
+            onClick={() => {
+              if (!document.fullscreenElement) {
+                mountRef.current?.parentElement?.requestFullscreen?.();
+              } else {
+                document.exitFullscreen?.();
+              }
+            }}
+            title="Toggle Fullscreen Viewport"
+            style={{
+              width: 26,
+              height: 24,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 4,
+              border: 'none',
+              backgroundColor: 'transparent',
+              color: isDark ? '#f4f4f5' : '#181a20',
+              cursor: 'pointer',
+            }}
+          >
+            <Maximize2 size={13} strokeWidth={2} />
+          </button>
+        </div>
       </div>
 
       {/* Floating Action Badge: "Sketch on Face" */}
@@ -2552,32 +2880,31 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         <div
           style={{
             position: 'absolute',
-            top: 92,
+            top: 52,
             left: 14,
             zIndex: 30,
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            backgroundColor: 'rgba(255, 255, 255, 0.96)',
-            backdropFilter: 'blur(8px)',
-            border: '1px solid #c7d2fe',
-            borderRadius: 8,
+            backgroundColor: isDark ? '#27272a' : '#ffffff',
+            border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+            borderRadius: 6,
             padding: '6px 10px',
-            boxShadow: '0 4px 12px rgba(79, 70, 229, 0.12)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
           }}
         >
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: '#374151' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: isDark ? '#f4f4f5' : '#181a20' }}>
               Face Selected ({selectedFace.plane.toUpperCase()} &bull; Elev: {selectedFace.elevation})
             </span>
-            <span style={{ fontSize: 9, color: '#6b7280' }}>
+            <span style={{ fontSize: 9, color: isDark ? '#a1a1aa' : '#6b7280' }}>
               Center: ({selectedFace.center.x}, {selectedFace.center.y}, {selectedFace.center.z})
             </span>
           </div>
 
           <button
             onClick={() => handleSketchOnFace(selectedFace)}
-            title="Reposition the 3D drafting plane & elevation directly onto this face"
+            title="Reposition drafting plane directly onto this face"
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -2585,40 +2912,18 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
               padding: '4px 10px',
               fontSize: 11,
               fontWeight: 600,
-              color: '#ffffff',
-              backgroundColor: '#4f46e5',
+              color: isDark ? '#18181b' : '#ffffff',
+              backgroundColor: isDark ? '#f4f4f5' : '#18181b',
               border: 'none',
-              borderRadius: 6,
+              borderRadius: 4,
               cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(79, 70, 229, 0.3)',
             }}
           >
-            <Sparkles size={13} />
-            Sketch on Face
+            <Sparkles size={12} />
+            <span>Sketch on Face</span>
           </button>
         </div>
       )}
-
-      {/* Interactive 3D Navigation Gizmo: Ultra fast 2D canvas with 0 React overhead! */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 14,
-          right: 14,
-          width: 96,
-          height: 96,
-          zIndex: 35,
-        }}
-      >
-        <canvas
-          ref={gizmoCanvasRef}
-          width={96}
-          height={96}
-          onClick={handleGizmoCanvasClick}
-          style={{ width: 96, height: 96, cursor: 'pointer' }}
-          title="3D Orientation Gizmo (Click an axis to align view)"
-        />
-      </div>
 
       {/* Floating 3D Cursor Coordinate Tooltip (Direct DOM) */}
       <div
@@ -2660,53 +2965,114 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
             color: '#f8fafc',
           }}
         >
-          <span style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', marginRight: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Align:
-          </span>
-          {[
-            { mode: 'world-z' as const, key: 'Z', label: 'World Z (Top)' },
-            { mode: 'world-y' as const, key: 'Y', label: 'World Y (Front)' },
-            { mode: 'world-x' as const, key: 'X', label: 'World X (Side)' },
-            { mode: 'view' as const, key: 'V', label: 'View (Camera)' },
-            { mode: 'surface' as const, key: 'N', label: 'Surface Normal' },
-          ].map((item) => {
-            const isActive = alignmentMode === item.mode;
-            return (
-              <button
-                key={item.mode}
-                onClick={() => switchAlignmentMode(item.mode)}
-                title={`Align to ${item.label} (Hotkey: ${item.key})`}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  padding: '3px 8px',
-                  fontSize: 11,
-                  fontWeight: isActive ? 700 : 500,
-                  color: isActive ? '#ffffff' : '#cbd5e1',
-                  backgroundColor: isActive ? '#4f46e5' : 'rgba(255, 255, 255, 0.08)',
-                  border: isActive ? '1px solid #818cf8' : '1px solid transparent',
-                  borderRadius: 5,
-                  cursor: 'pointer',
-                  transition: 'all 0.12s ease',
-                }}
-              >
-                <kbd
-                  style={{
-                    fontSize: 9,
-                    fontWeight: 800,
-                    padding: '1px 4px',
-                    borderRadius: 3,
-                    backgroundColor: isActive ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.15)',
-                    color: isActive ? '#e0e7ff' : '#94a3b8',
-                  }}
-                >
-                  {item.key}
-                </kbd>
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
+          {activeTool === 'arc' ? (
+            <>
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', marginRight: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Arc Plane:
+              </span>
+              {[
+                { dir: '+z' as const, key: 'Z', label: '+Z (Up)' },
+                { dir: '-z' as const, key: 'Shift+Z', label: '-Z (Down)' },
+                { dir: '+y' as const, key: 'Y', label: '+Y (North)' },
+                { dir: '-y' as const, key: 'Shift+Y', label: '-Y (South)' },
+                { dir: '+x' as const, key: 'X', label: '+X (East)' },
+                { dir: '-x' as const, key: 'Shift+X', label: '-X (West)' },
+              ].map((item) => {
+                const isActive = activeBulgeDir === item.dir;
+                return (
+                  <button
+                    key={item.dir}
+                    onClick={() => {
+                      setActiveBulgeDir(item.dir);
+                      if (lastCreatedEntity && lastCreatedEntity.type === 'arc') {
+                        handleOperatorUpdate({ bulgeDir: item.dir });
+                      }
+                    }}
+                    title={`Bulge orientation ${item.label} (Hotkey: ${item.key})`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '3px 8px',
+                      fontSize: 11,
+                      fontWeight: isActive ? 700 : 500,
+                      color: isActive ? '#ffffff' : '#cbd5e1',
+                      backgroundColor: isActive ? '#4f46e5' : 'rgba(255, 255, 255, 0.08)',
+                      border: isActive ? '1px solid #818cf8' : '1px solid transparent',
+                      borderRadius: 5,
+                      cursor: 'pointer',
+                      transition: 'all 0.12s ease',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    <kbd
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 800,
+                        padding: '1px 4px',
+                        borderRadius: 3,
+                        backgroundColor: isActive ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.15)',
+                        color: isActive ? '#e0e7ff' : '#94a3b8',
+                      }}
+                    >
+                      {item.dir}
+                    </kbd>
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', marginRight: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Align:
+              </span>
+              {[
+                { mode: 'world-z' as const, key: 'Z', label: 'World Z (Top)' },
+                { mode: 'world-y' as const, key: 'Y', label: 'World Y (Front)' },
+                { mode: 'world-x' as const, key: 'X', label: 'World X (Side)' },
+                { mode: 'view' as const, key: 'V', label: 'View (Camera)' },
+                { mode: 'surface' as const, key: 'N', label: 'Surface Normal' },
+              ].map((item) => {
+                const isActive = alignmentMode === item.mode;
+                return (
+                  <button
+                    key={item.mode}
+                    onClick={() => switchAlignmentMode(item.mode)}
+                    title={`Align to ${item.label} (Hotkey: ${item.key})`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '3px 8px',
+                      fontSize: 11,
+                      fontWeight: isActive ? 700 : 500,
+                      color: isActive ? '#ffffff' : '#cbd5e1',
+                      backgroundColor: isActive ? '#4f46e5' : 'rgba(255, 255, 255, 0.08)',
+                      border: isActive ? '1px solid #818cf8' : '1px solid transparent',
+                      borderRadius: 5,
+                      cursor: 'pointer',
+                      transition: 'all 0.12s ease',
+                    }}
+                  >
+                    <kbd
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 800,
+                        padding: '1px 4px',
+                        borderRadius: 3,
+                        backgroundColor: isActive ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.15)',
+                        color: isActive ? '#e0e7ff' : '#94a3b8',
+                      }}
+                    >
+                      {item.key}
+                    </kbd>
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </>
+          )}
         </div>
       )}
 
@@ -2719,7 +3085,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
             left: 14,
             zIndex: 35,
             minWidth: 260,
-            maxWidth: 300,
+            maxWidth: 320,
             backgroundColor: 'rgba(24, 24, 27, 0.95)',
             backdropFilter: 'blur(10px)',
             border: '1px solid rgba(255, 255, 255, 0.18)',
@@ -2751,7 +3117,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
                 {lastCreatedEntity.type === 'cylinder'
                   ? 'Add Cylinder'
                   : lastCreatedEntity.type === 'arc'
-                  ? 'Add Half Arc'
+                  ? 'Add 2-Vertex Arc'
                   : 'Add Circle'}
               </span>
             </div>
@@ -2761,48 +3127,136 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           {/* Collapsible Body */}
           {isOperatorOpen && (
             <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {/* Alignment Selector */}
+              {lastCreatedEntity.type === 'arc' ? (
+                /* Arc Bulge Plane Selector (+Z, -Z, +Y, -Y, +X, -X) */
+                <div>
+                  <label style={{ fontSize: 10, color: '#a1a1aa', display: 'block', marginBottom: 4 }}>
+                    Arc Plane / Bulge:
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
+                    {(['+z', '-z', '+y', '-y', '+x', '-x'] as const).map((dir) => {
+                      const isSel = (lastCreatedEntity.bulgeDir || activeBulgeDir) === dir;
+                      return (
+                        <button
+                          key={dir}
+                          onClick={() => handleOperatorUpdate({ bulgeDir: dir })}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: 10,
+                            fontWeight: isSel ? 700 : 500,
+                            backgroundColor: isSel ? '#4f46e5' : 'rgba(255, 255, 255, 0.08)',
+                            color: isSel ? '#ffffff' : '#d4d4d8',
+                            border: isSel ? '1px solid #818cf8' : '1px solid transparent',
+                            borderRadius: 4,
+                            cursor: 'pointer',
+                            textTransform: 'uppercase',
+                          }}
+                        >
+                          {dir}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                /* Alignment Selector for Circles and Cylinders */
+                <div>
+                  <label style={{ fontSize: 10, color: '#a1a1aa', display: 'block', marginBottom: 4 }}>
+                    Align:
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
+                    {(
+                      [
+                        { id: 'world-z', label: 'World Z' },
+                        { id: 'world-y', label: 'World Y' },
+                        { id: 'world-x', label: 'World X' },
+                        { id: 'view', label: 'View' },
+                        { id: 'surface', label: 'Surface' },
+                      ] as const
+                    ).map((m) => {
+                      const isSel = lastCreatedEntity.alignmentMode === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          onClick={() => handleOperatorUpdate({ alignmentMode: m.id })}
+                          style={{
+                            padding: '3px 4px',
+                            fontSize: 10,
+                            fontWeight: isSel ? 700 : 500,
+                            backgroundColor: isSel ? '#4f46e5' : 'rgba(255, 255, 255, 0.08)',
+                            color: isSel ? '#ffffff' : '#d4d4d8',
+                            border: isSel ? '1px solid #818cf8' : '1px solid transparent',
+                            borderRadius: 4,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {m.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Radius Control & Presets */}
               <div>
-                <label style={{ fontSize: 10, color: '#a1a1aa', display: 'block', marginBottom: 4 }}>
-                  Align:
-                </label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
-                  {(
-                    [
-                      { id: 'world-z', label: 'World Z' },
-                      { id: 'world-y', label: 'World Y' },
-                      { id: 'world-x', label: 'World X' },
-                      { id: 'view', label: 'View' },
-                      { id: 'surface', label: 'Surface' },
-                    ] as const
-                  ).map((m) => {
-                    const isSel = lastCreatedEntity.alignmentMode === m.id;
-                    return (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <label style={{ fontSize: 10, color: '#a1a1aa' }}>Radius:</label>
+                  {lastCreatedEntity.type === 'arc' && lastCreatedEntity.chordDistance && (
+                    <div style={{ display: 'flex', gap: 3 }}>
                       <button
-                        key={m.id}
-                        onClick={() => handleOperatorUpdate({ alignmentMode: m.id })}
+                        onClick={() => handleOperatorUpdate({ radius: Math.max(1, Math.round(lastCreatedEntity.chordDistance! / 2)) })}
+                        title="Semicircle (180° / π radians): Radius = Chord / 2"
                         style={{
-                          padding: '3px 4px',
-                          fontSize: 10,
-                          fontWeight: isSel ? 700 : 500,
-                          backgroundColor: isSel ? '#4f46e5' : 'rgba(255, 255, 255, 0.08)',
-                          color: isSel ? '#ffffff' : '#d4d4d8',
-                          border: isSel ? '1px solid #818cf8' : '1px solid transparent',
-                          borderRadius: 4,
+                          padding: '1px 5px',
+                          fontSize: 9,
+                          fontWeight: 600,
+                          backgroundColor: 'rgba(255,255,255,0.1)',
+                          color: '#c7d2fe',
+                          border: '1px solid rgba(255,255,255,0.15)',
+                          borderRadius: 3,
                           cursor: 'pointer',
                         }}
                       >
-                        {m.label}
+                        π (D/2)
                       </button>
-                    );
-                  })}
+                      <button
+                        onClick={() => handleOperatorUpdate({ radius: Math.max(1, Math.round(lastCreatedEntity.chordDistance!)) })}
+                        title="Radius = Chord Distance"
+                        style={{
+                          padding: '1px 5px',
+                          fontSize: 9,
+                          fontWeight: 600,
+                          backgroundColor: 'rgba(255,255,255,0.1)',
+                          color: '#c7d2fe',
+                          border: '1px solid rgba(255,255,255,0.15)',
+                          borderRadius: 3,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        1× Dist
+                      </button>
+                      <button
+                        onClick={() => handleOperatorUpdate({ radius: Math.max(1, Math.round(lastCreatedEntity.chordDistance! * 2)) })}
+                        title="Radius = 2 * Chord Distance (Gentle curve)"
+                        style={{
+                          padding: '1px 5px',
+                          fontSize: 9,
+                          fontWeight: 600,
+                          backgroundColor: 'rgba(255,255,255,0.1)',
+                          color: '#c7d2fe',
+                          border: '1px solid rgba(255,255,255,0.15)',
+                          borderRadius: 3,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        2× Dist
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </div>
 
-              {/* Radius Control */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <label style={{ fontSize: 10, color: '#a1a1aa' }}>Radius:</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                   <button
                     onClick={() => handleOperatorUpdate({ radius: Math.max(1, lastCreatedEntity.radius - 1) })}
                     style={{
@@ -2829,7 +3283,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
                       if (!isNaN(v) && v > 0) handleOperatorUpdate({ radius: v });
                     }}
                     style={{
-                      width: 48,
+                      width: 52,
                       textAlign: 'center',
                       backgroundColor: 'rgba(0,0,0,0.4)',
                       border: '1px solid rgba(255,255,255,0.2)',
@@ -2858,6 +3312,25 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
                   </button>
                 </div>
               </div>
+
+              {/* Arc Chord & Readout */}
+              {lastCreatedEntity.type === 'arc' && lastCreatedEntity.chordDistance && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '4px 6px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    borderRadius: 4,
+                    fontSize: 9,
+                    color: '#94a3b8',
+                  }}
+                >
+                  <span>Chord Dist: {lastCreatedEntity.chordDistance}</span>
+                  <span>Min R (π): {Math.round(lastCreatedEntity.chordDistance / 2)}</span>
+                </div>
+              )}
 
               {/* Height Control (Cylinder only) */}
               {lastCreatedEntity.type === 'cylinder' && (
@@ -2961,33 +3434,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           )}
         </div>
       )}
-
-      {/* Navigation Guide Watermark (Bottom-Left) */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 12,
-          left: 14,
-          zIndex: 10,
-          pointerEvents: 'none',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-          color: '#94a3b8',
-          fontSize: 10,
-          backgroundColor: 'rgba(255, 255, 255, 0.75)',
-          backdropFilter: 'blur(4px)',
-          padding: '4px 8px',
-          borderRadius: 4,
-          border: '1px solid #e5e7eb',
-        }}
-      >
-        <span>&bull; <strong>Right-Click Drag</strong>: Rotate View &bull; <strong>Middle Drag / Shift+Right</strong>: Pan</span>
-        <span>&bull; <strong>Wheel</strong>: Zoom &bull; <strong>Right-Click Tap / Esc</strong>: Cancel</span>
-        <span>&bull; Numpad 1/3/7: <strong>Views</strong> &bull; Numpad 5: <strong>Ortho/Persp</strong> &bull; F: <strong>Frame</strong></span>
-        <span>&bull; Shift+Tab: <strong>Magnet Snap</strong> &bull; Hold Ctrl: <strong>Invert Snap</strong></span>
-        <span>&bull; <strong>Q / E</strong>: <strong>Elevate Z (- / +)</strong> &bull; Z/Y/X/V/N: <strong>Align</strong> &bull; F9: <strong>Adjust Last Op</strong></span>
-      </div>
     </div>
   );
 });

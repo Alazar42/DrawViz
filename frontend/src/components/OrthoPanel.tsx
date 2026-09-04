@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, memo } from 'react';
-import { DrawingLine, DrawingArc, DrawingCylinder } from '../types/drawing';
+import { DrawingLine, DrawingArc, DrawingCylinder, AppTheme } from '../types/drawing';
 import { ThreeOrthoViewport } from '../canvas/ThreeOrthoViewport';
 import { ChevronDown, ChevronUp, GripHorizontal } from 'lucide-react';
 
@@ -11,6 +11,7 @@ interface OrthoPanelProps {
   onToggle: () => void;
   selectedLineId?: string | null;
   onSelectLine?: (id: string | null) => void;
+  theme?: AppTheme;
 }
 
 export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
@@ -21,7 +22,9 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
   onToggle,
   selectedLineId,
   onSelectLine,
+  theme = 'light',
 }) => {
+  const isDark = theme === 'dark';
   const [panelHeight, setPanelHeight] = useState<number>(240);
   const [hideOccluded, setHideOccluded] = useState<boolean>(true);
   const [layoutMode, setLayoutMode] = useState<'horizontal' | 'cad3'>('horizontal');
@@ -76,8 +79,8 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
   return (
     <div
       style={{
-        borderTop: '1px solid #e5e7eb',
-        backgroundColor: '#f9fafb',
+        borderTop: isDark ? '1px solid #2d3139' : '1px solid #e5e7eb',
+        backgroundColor: isDark ? '#181a20' : '#f9fafb',
         display: 'flex',
         flexDirection: 'column',
         transition: isResizing ? 'none' : 'height 0.18s cubic-bezier(0.4, 0, 0.2, 1)',
@@ -108,7 +111,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
             width: 36,
             height: 3,
             borderRadius: 2,
-            backgroundColor: isResizing ? '#4b5563' : '#d1d5db',
+            backgroundColor: isResizing ? (isDark ? '#64748b' : '#4b5563') : (isDark ? '#334155' : '#d1d5db'),
             transition: 'background-color 0.1s ease',
           }}
         />
@@ -126,8 +129,8 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
           justifyContent: 'space-between',
           cursor: 'pointer',
           userSelect: 'none',
-          backgroundColor: '#ffffff',
-          borderBottom: isOpen ? '1px solid #e5e7eb' : 'none',
+          backgroundColor: isDark ? '#1e2026' : '#ffffff',
+          borderBottom: isOpen ? (isDark ? '1px solid #2d3139' : '1px solid #e5e7eb') : 'none',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -138,17 +141,17 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
               cursor: 'row-resize',
               display: 'flex',
               alignItems: 'center',
-              color: '#9ca3af',
+              color: isDark ? '#64748b' : '#9ca3af',
               padding: '2px 4px',
             }}
             title="Drag to resize panel height"
           >
             <GripHorizontal size={13} />
           </div>
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#374151', letterSpacing: '0.04em' }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: isDark ? '#f1f5f9' : '#374151', letterSpacing: '0.04em' }}>
             ORTHOGRAPHIC PROJECTIONS
           </span>
-          <span style={{ fontSize: 10, color: '#9ca3af' }}>
+          <span style={{ fontSize: 10, color: isDark ? '#94a3b8' : '#9ca3af' }}>
             (Top Plan, Front Elevation, Right Side &bull; Resizable)
           </span>
         </div>
@@ -163,13 +166,17 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
                   setHideOccluded(!hideOccluded);
                 }}
                 style={{
-                  background: hideOccluded ? '#eef2ff' : '#f3f4f6',
-                  border: '1px solid #d1d5db',
+                  background: hideOccluded
+                    ? (isDark ? '#312e81' : '#eef2ff')
+                    : (isDark ? '#22262e' : '#f3f4f6'),
+                  border: isDark ? '1px solid #334155' : '1px solid #d1d5db',
                   borderRadius: 3,
                   padding: '2px 6px',
                   fontSize: 10,
                   fontWeight: 600,
-                  color: hideOccluded ? '#4338ca' : '#4b5563',
+                  color: hideOccluded
+                    ? (isDark ? '#c7d2fe' : '#4338ca')
+                    : (isDark ? '#94a3b8' : '#4b5563'),
                   cursor: 'pointer',
                 }}
                 title="Toggle hidden edge removal behind planar faces (Technical Blueprint Mode)"
@@ -184,13 +191,17 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
                   setLayoutMode(layoutMode === 'horizontal' ? 'cad3' : 'horizontal');
                 }}
                 style={{
-                  background: layoutMode === 'cad3' ? '#eef2ff' : '#f3f4f6',
-                  border: '1px solid #d1d5db',
+                  background: layoutMode === 'cad3'
+                    ? (isDark ? '#312e81' : '#eef2ff')
+                    : (isDark ? '#22262e' : '#f3f4f6'),
+                  border: isDark ? '1px solid #334155' : '1px solid #d1d5db',
                   borderRadius: 3,
                   padding: '2px 6px',
                   fontSize: 10,
                   fontWeight: 600,
-                  color: layoutMode === 'cad3' ? '#4338ca' : '#4b5563',
+                  color: layoutMode === 'cad3'
+                    ? (isDark ? '#c7d2fe' : '#4338ca')
+                    : (isDark ? '#94a3b8' : '#4b5563'),
                   cursor: 'pointer',
                 }}
                 title="Switch between Strip layout and Technical 3-View (PLANTA top, FRONTAL bottom, LATERAL right)"
@@ -198,7 +209,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
                 Layout: {layoutMode === 'cad3' ? '3-View (CAD)' : 'Strip'}
               </button>
 
-              <span style={{ fontSize: 9, color: '#9ca3af', fontFamily: 'monospace' }}>
+              <span style={{ fontSize: 9, color: isDark ? '#64748b' : '#9ca3af', fontFamily: 'monospace' }}>
                 {panelHeight}px
               </span>
             </>
@@ -211,7 +222,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
               padding: 2,
               display: 'flex',
               alignItems: 'center',
-              color: '#6b7280',
+              color: isDark ? '#94a3b8' : '#6b7280',
             }}
             title={isOpen ? 'Collapse projections panel' : 'Expand projections panel'}
           >
@@ -241,6 +252,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
               selectedLineId={selectedLineId}
               onSelectLine={onSelectLine}
               hideOccluded={hideOccluded}
+              theme={theme}
             />
             <ThreeOrthoViewport
               title="FRONTAL (FRONT)"
@@ -251,6 +263,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
               selectedLineId={selectedLineId}
               onSelectLine={onSelectLine}
               hideOccluded={hideOccluded}
+              theme={theme}
             />
             <ThreeOrthoViewport
               title="LATERAL (SIDE)"
@@ -261,6 +274,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
               selectedLineId={selectedLineId}
               onSelectLine={onSelectLine}
               hideOccluded={hideOccluded}
+              theme={theme}
             />
           </div>
         ) : (
@@ -286,6 +300,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
                 selectedLineId={selectedLineId}
                 onSelectLine={onSelectLine}
                 hideOccluded={hideOccluded}
+                theme={theme}
               />
             </div>
             <div style={{ gridColumn: '1 / 2', gridRow: '2 / 3', minHeight: 0 }}>
@@ -298,6 +313,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
                 selectedLineId={selectedLineId}
                 onSelectLine={onSelectLine}
                 hideOccluded={hideOccluded}
+                theme={theme}
               />
             </div>
             <div style={{ gridColumn: '2 / 3', gridRow: '2 / 3', minHeight: 0 }}>
@@ -310,6 +326,7 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
                 selectedLineId={selectedLineId}
                 onSelectLine={onSelectLine}
                 hideOccluded={hideOccluded}
+                theme={theme}
               />
             </div>
           </div>

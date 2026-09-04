@@ -1,5 +1,5 @@
 import React from 'react';
-import { DrawingLine, Lesson } from '../types/drawing';
+import { DrawingLine, Lesson, AppTheme } from '../types/drawing';
 import { evaluateDrawing } from '../geometry/evaluator';
 import { CheckCircle2, Circle, Lightbulb } from 'lucide-react';
 
@@ -7,13 +7,17 @@ interface InstructionsPanelProps {
   lesson: Lesson | null;
   lines: DrawingLine[];
   unitSize: number;
+  theme?: AppTheme;
 }
 
 export const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
   lesson,
   lines,
   unitSize,
+  theme = 'light',
 }) => {
+  const isDark = theme === 'dark';
+
   if (!lesson) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11 }}>
@@ -21,14 +25,14 @@ export const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
           style={{
             fontSize: 10,
             fontWeight: 700,
-            color: '#9ca3af',
+            color: isDark ? '#94a3b8' : '#9ca3af',
             letterSpacing: '0.06em',
             textTransform: 'uppercase',
           }}
         >
           Instructions
         </div>
-        <p style={{ color: '#6b7280', margin: 0 }}>
+        <p style={{ color: isDark ? '#94a3b8' : '#6b7280', margin: 0, lineHeight: 1.45 }}>
           Freeform Practice Mode active. Draw isometric lines freely or switch modes in the top bar.
         </p>
       </div>
@@ -45,7 +49,7 @@ export const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
           style={{
             fontSize: 10,
             fontWeight: 700,
-            color: '#9ca3af',
+            color: isDark ? '#94a3b8' : '#9ca3af',
             letterSpacing: '0.06em',
             textTransform: 'uppercase',
             marginBottom: 4,
@@ -53,7 +57,7 @@ export const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
         >
           Instructions
         </div>
-        <p style={{ fontSize: 11, color: '#4b5563', lineHeight: 1.45, margin: 0 }}>
+        <p style={{ fontSize: 11, color: isDark ? '#cbd5e1' : '#4b5563', lineHeight: 1.45, margin: 0 }}>
           {lesson.instructions}
         </p>
       </div>
@@ -72,7 +76,7 @@ export const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
             style={{
               fontSize: 10,
               fontWeight: 700,
-              color: '#9ca3af',
+              color: isDark ? '#94a3b8' : '#9ca3af',
               letterSpacing: '0.06em',
               textTransform: 'uppercase',
             }}
@@ -85,8 +89,12 @@ export const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
               fontFamily: 'monospace',
               padding: '1px 5px',
               borderRadius: 3,
-              backgroundColor: evaluation.allCompleted ? '#dcfce7' : '#f3f4f6',
-              color: evaluation.allCompleted ? '#166534' : '#374151',
+              backgroundColor: evaluation.allCompleted
+                ? (isDark ? '#064e3b' : '#dcfce7')
+                : (isDark ? '#282c34' : '#f3f4f6'),
+              color: evaluation.allCompleted
+                ? (isDark ? '#6ee7b7' : '#166534')
+                : (isDark ? '#cbd5e1' : '#374151'),
               fontWeight: 600,
             }}
           >
@@ -105,17 +113,19 @@ export const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
                   alignItems: 'flex-start',
                   gap: 6,
                   fontSize: 11,
-                  color: isDone ? '#111827' : '#6b7280',
+                  color: isDone
+                    ? (isDark ? '#f1f5f9' : '#111827')
+                    : (isDark ? '#94a3b8' : '#6b7280'),
                 }}
               >
                 <div style={{ marginTop: 1, flexShrink: 0 }}>
                   {isDone ? (
-                    <CheckCircle2 size={13} color="#111827" />
+                    <CheckCircle2 size={13} color={isDark ? '#38bdf8' : '#111827'} />
                   ) : (
-                    <Circle size={13} color="#9ca3af" />
+                    <Circle size={13} color={isDark ? '#64748b' : '#9ca3af'} />
                   )}
                 </div>
-                <span style={{ textDecoration: isDone ? 'none' : 'none', fontWeight: isDone ? 500 : 400 }}>
+                <span style={{ fontWeight: isDone ? 500 : 400 }}>
                   {obj.description}
                 </span>
               </div>
@@ -129,9 +139,9 @@ export const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
         <div
           style={{
             padding: '8px 10px',
-            backgroundColor: '#f9fafb',
+            backgroundColor: isDark ? '#1e2026' : '#f9fafb',
             borderRadius: 4,
-            border: '1px solid #f3f4f6',
+            border: isDark ? '1px solid #2d3139' : '1px solid #f3f4f6',
             display: 'flex',
             flexDirection: 'column',
             gap: 4,
@@ -144,13 +154,13 @@ export const InstructionsPanel: React.FC<InstructionsPanelProps> = ({
               gap: 4,
               fontSize: 10,
               fontWeight: 600,
-              color: '#4b5563',
+              color: isDark ? '#cbd5e1' : '#4b5563',
             }}
           >
-            <Lightbulb size={11} />
+            <Lightbulb size={11} color={isDark ? '#facc15' : undefined} />
             <span>Drafting Tip</span>
           </div>
-          <span style={{ fontSize: 10, color: '#6b7280', lineHeight: 1.4 }}>
+          <span style={{ fontSize: 10, color: isDark ? '#94a3b8' : '#6b7280', lineHeight: 1.4 }}>
             {lesson.hints[0]}
           </span>
         </div>

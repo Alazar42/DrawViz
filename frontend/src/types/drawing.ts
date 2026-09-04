@@ -27,6 +27,8 @@ export interface DrawingLine {
 
 export type IsoplanePlane = 'top' | 'front' | 'side';
 
+export type ArcBulgeDirection = '+z' | '-z' | '+y' | '-y' | '+x' | '-x';
+
 export interface DrawingArc {
   id: string;
   center: Point3D;
@@ -35,6 +37,9 @@ export interface DrawingArc {
   normal?: Point3D; // true 3D normal vector for inclined planes
   startAngle?: number; // degrees, default 0
   endAngle?: number;   // degrees, default 360
+  startPoint?: Point3D; // endpoint 1 for two-vertex arc
+  endPoint?: Point3D;   // endpoint 2 for two-vertex arc
+  bulgeDir?: ArcBulgeDirection; // bulge orientation (+z, -z, +y, -y, +x, -x)
   layerId: string;
   style?: LineStyle;
 }
@@ -114,3 +119,5 @@ export interface Lesson {
   targetLines?: DrawingLine[];
   hints?: string[];
 }
+
+export type AppTheme = 'light' | 'dark';

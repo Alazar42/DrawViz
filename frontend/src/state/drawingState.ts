@@ -9,6 +9,7 @@ import {
   Point3D,
   ScreenPoint,
   ToolType,
+  AppTheme,
 } from '../types/drawing';
 import { ViewportTransform, IsoplaneType } from '../geometry/isometric';
 import { HostPlaneInfo } from '../geometry/snapping';
@@ -77,6 +78,31 @@ export function useDrawingState() {
   const [selectionMode, setSelectionMode] = useState<import('../types/drawing').SelectionMode>('edge');
   const [selectedVertex, setSelectedVertex] = useState<Point3D | null>(null);
   const [selectedFace, setSelectedFace] = useState<import('../types/drawing').Face3D | null>(null);
+  const [theme, setTheme] = useState<AppTheme>(() => {
+    try {
+      const saved = localStorage.getItem('drawviz_theme');
+      return (saved === 'dark' || saved === 'light') ? saved : 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === 'light' ? 'dark' : 'light';
+      try {
+        localStorage.setItem('drawviz_theme', next);
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  const setAppTheme = useCallback((t: AppTheme) => {
+    setTheme(t);
+    try {
+      localStorage.setItem('drawviz_theme', t);
+    } catch {}
+  }, []);
 
   // Keyboard shortcut listener for Blender-style 1, 2, 3 modes
   useEffect(() => {
@@ -357,5 +383,8 @@ export function useDrawingState() {
     setSelectedVertex,
     selectedFace,
     setSelectedFace,
+    theme,
+    toggleTheme,
+    setTheme: setAppTheme,
   };
 }
