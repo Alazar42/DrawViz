@@ -19,6 +19,8 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = ({
   onSelectLine,
 }) => {
   const [panelHeight, setPanelHeight] = useState<number>(240);
+  const [hideOccluded, setHideOccluded] = useState<boolean>(true);
+  const [layoutMode, setLayoutMode] = useState<'horizontal' | 'cad3'>('horizontal');
   const isDraggingRef = useRef<boolean>(false);
   const dragStartYRef = useRef<number>(0);
   const startHeightRef = useRef<number>(240);
@@ -147,11 +149,55 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = ({
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {isOpen && (
-            <span style={{ fontSize: 9, color: '#9ca3af', fontFamily: 'monospace' }}>
-              {panelHeight}px
-            </span>
+            <>
+              {/* Occlusion Toggle */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setHideOccluded(!hideOccluded);
+                }}
+                style={{
+                  background: hideOccluded ? '#eef2ff' : '#f3f4f6',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 3,
+                  padding: '2px 6px',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: hideOccluded ? '#4338ca' : '#4b5563',
+                  cursor: 'pointer',
+                }}
+                title="Toggle hidden edge removal behind planar faces (Technical Blueprint Mode)"
+              >
+                Plane Occlusion: {hideOccluded ? 'ON (Solid)' : 'OFF (Wireframe)'}
+              </button>
+
+              {/* Layout Mode Toggle */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLayoutMode(layoutMode === 'horizontal' ? 'cad3' : 'horizontal');
+                }}
+                style={{
+                  background: layoutMode === 'cad3' ? '#eef2ff' : '#f3f4f6',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 3,
+                  padding: '2px 6px',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: layoutMode === 'cad3' ? '#4338ca' : '#4b5563',
+                  cursor: 'pointer',
+                }}
+                title="Switch between Strip layout and Technical 3-View (PLANTA top, FRONTAL bottom, LATERAL right)"
+              >
+                Layout: {layoutMode === 'cad3' ? '3-View (CAD)' : 'Strip'}
+              </button>
+
+              <span style={{ fontSize: 9, color: '#9ca3af', fontFamily: 'monospace' }}>
+                {panelHeight}px
+              </span>
+            </>
           )}
           <button
             style={{
@@ -170,39 +216,88 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = ({
         </div>
       </div>
 
-      {/* 3 Orthographic Viewports */}
+      {/* Orthographic Viewports */}
       {isOpen && (
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            gap: 10,
-            padding: 10,
-            overflow: 'hidden',
-          }}
-        >
-          <OrthoViewport
-            title="TOP (PLAN)"
-            viewType="top"
-            lines={lines}
-            selectedLineId={selectedLineId}
-            onSelectLine={onSelectLine}
-          />
-          <OrthoViewport
-            title="FRONT (ELEVATION)"
-            viewType="front"
-            lines={lines}
-            selectedLineId={selectedLineId}
-            onSelectLine={onSelectLine}
-          />
-          <OrthoViewport
-            title="SIDE (RIGHT)"
-            viewType="side"
-            lines={lines}
-            selectedLineId={selectedLineId}
-            onSelectLine={onSelectLine}
-          />
-        </div>
+        layoutMode === 'horizontal' ? (
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              gap: 10,
+              padding: 10,
+              overflow: 'hidden',
+            }}
+          >
+            <OrthoViewport
+              title="PLANTA (TOP)"
+              viewType="top"
+              lines={lines}
+              selectedLineId={selectedLineId}
+              onSelectLine={onSelectLine}
+              hideOccluded={hideOccluded}
+            />
+            <OrthoViewport
+              title="FRONTAL (FRONT)"
+              viewType="front"
+              lines={lines}
+              selectedLineId={selectedLineId}
+              onSelectLine={onSelectLine}
+              hideOccluded={hideOccluded}
+            />
+            <OrthoViewport
+              title="LATERAL (SIDE)"
+              viewType="side"
+              lines={lines}
+              selectedLineId={selectedLineId}
+              onSelectLine={onSelectLine}
+              hideOccluded={hideOccluded}
+            />
+          </div>
+        ) : (
+          /* Technical CAD 3-View Layout (Planta Top, Frontal Bottom-Left, Lateral Bottom-Right) */
+          <div
+            style={{
+              flex: 1,
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gridTemplateRows: '1fr 1fr',
+              gap: 8,
+              padding: 8,
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ gridColumn: '1 / 2', gridRow: '1 / 2', minHeight: 0 }}>
+              <OrthoViewport
+                title="PLANTA (TOP)"
+                viewType="top"
+                lines={lines}
+                selectedLineId={selectedLineId}
+                onSelectLine={onSelectLine}
+                hideOccluded={hideOccluded}
+              />
+            </div>
+            <div style={{ gridColumn: '1 / 2', gridRow: '2 / 3', minHeight: 0 }}>
+              <OrthoViewport
+                title="FRONTAL (FRONT)"
+                viewType="front"
+                lines={lines}
+                selectedLineId={selectedLineId}
+                onSelectLine={onSelectLine}
+                hideOccluded={hideOccluded}
+              />
+            </div>
+            <div style={{ gridColumn: '2 / 3', gridRow: '2 / 3', minHeight: 0 }}>
+              <OrthoViewport
+                title="LATERAL (SIDE)"
+                viewType="side"
+                lines={lines}
+                selectedLineId={selectedLineId}
+                onSelectLine={onSelectLine}
+                hideOccluded={hideOccluded}
+              />
+            </div>
+          </div>
+        )
       )}
     </div>
   );

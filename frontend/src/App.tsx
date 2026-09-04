@@ -255,6 +255,16 @@ export const App: React.FC = () => {
           onUpdateGridSettings={state.setGridSettings}
           appMode={state.appMode}
           onSetAppMode={state.setAppMode}
+          activeElevation={state.activeElevation}
+          onSetElevation={(elev) => {
+            state.setActiveElevation(elev);
+            setStatusMessage(`Active Elevation set to Z = ${elev >= 0 ? `+${elev}` : elev}`);
+          }}
+          activeIsoplane={state.activeIsoplane}
+          onSetIsoplane={(iso) => {
+            state.setActiveIsoplane(iso);
+            setStatusMessage(`Switched to ${iso.toUpperCase()} Isoplane`);
+          }}
         />
 
         {/* Center Drawing Canvas & Collapsible Bottom Orthographic Panel */}
@@ -279,6 +289,8 @@ export const App: React.FC = () => {
               gridSettings={state.gridSettings}
               viewport={state.viewport}
               activeAnchor={state.activeAnchor}
+              activeElevation={state.activeElevation}
+              activeIsoplane={state.activeIsoplane}
               onSelectLine={state.setSelectedLineId}
               onAddLine={(line) => {
                 state.addLine(line);
@@ -291,6 +303,14 @@ export const App: React.FC = () => {
               onSetViewport={state.setViewport}
               onSetAnchor={state.setActiveAnchor}
               onCursorUpdate={state.setCursorState}
+              onSetElevation={(elev) => {
+                state.setActiveElevation(elev);
+                setStatusMessage(`Active Elevation set to Z = ${elev >= 0 ? `+${elev}` : elev}`);
+              }}
+              onSetIsoplane={(iso) => {
+                state.setActiveIsoplane(iso);
+                setStatusMessage(`Switched to ${iso.toUpperCase()} Isoplane`);
+              }}
             />
           </div>
 
@@ -369,6 +389,16 @@ export const App: React.FC = () => {
         cursorState={state.cursorState}
         snapEnabled={state.gridSettings.snapToGrid}
         zoom={state.viewport.zoom}
+        activeElevation={state.activeElevation}
+        activeIsoplane={state.activeIsoplane}
+        onSetElevation={(elev) => {
+          state.setActiveElevation(elev);
+          setStatusMessage(`Active Elevation set to Z = ${elev >= 0 ? `+${elev}` : elev}`);
+        }}
+        onSetIsoplane={(iso) => {
+          state.setActiveIsoplane(iso);
+          setStatusMessage(`Switched to ${iso.toUpperCase()} Isoplane`);
+        }}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onZoomReset={handleZoomReset}

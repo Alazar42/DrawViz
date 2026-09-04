@@ -6,6 +6,8 @@ import {
   screenToWorld,
   ViewportTransform,
   COS_30,
+  TAN_30,
+  IsoplaneType,
 } from '../geometry/isometric';
 import { calculateSnap, SnapResult } from '../geometry/snapping';
 import { CursorState } from '../state/drawingState';
@@ -18,12 +20,16 @@ interface IsometricCanvasProps {
   gridSettings: GridSettings;
   viewport: ViewportTransform;
   activeAnchor: Point3D | null;
+  activeElevation?: number;
+  activeIsoplane?: IsoplaneType;
   onSelectLine: (id: string | null) => void;
   onAddLine: (line: DrawingLine) => void;
   onRemoveLine: (id: string) => void;
   onSetViewport: (transform: Partial<ViewportTransform>) => void;
   onSetAnchor: (anchor: Point3D | null) => void;
   onCursorUpdate: (state: CursorState) => void;
+  onSetElevation?: (elevation: number) => void;
+  onSetIsoplane?: (isoplane: IsoplaneType) => void;
 }
 
 // Helper: Distance from point to line segment in screen pixels
@@ -46,12 +52,16 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
   gridSettings,
   viewport,
   activeAnchor,
+  activeElevation = 0,
+  activeIsoplane = 'top',
   onSelectLine,
   onAddLine,
   onRemoveLine,
   onSetViewport,
   onSetAnchor,
   onCursorUpdate,
+  onSetElevation,
+  onSetIsoplane,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const gridCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -138,23 +148,23 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       ctx.lineTo(wx, height);
     }
 
-    // 2. Slanted grid lines at +30° and -30°
+    // 2. Slanted grid lines at +30° and -30° (step by 1 for full 6-way intersections)
     const diagSpan = Math.max(width, height) * 2;
-    for (let r = startRow - (endCol - startCol); r <= endRow + (endCol - startCol); r += 2) {
+    for (let r = startRow - (endCol - startCol); r <= endRow + (endCol - startCol); r += 1) {
       const yAnchor = r * unit + viewport.panY;
 
-      // +30 degrees (slope: 1 / sqrt(3) -> dy = dx * 0.57735)
-      ctx.moveTo(-diagSpan, yAnchor - diagSpan * 0.57735);
-      ctx.lineTo(width + diagSpan, yAnchor + (width + diagSpan) * 0.57735);
+      // +30 degrees (slope: TAN_30 = 1 / sqrt(3))
+      ctx.moveTo(-diagSpan, yAnchor - diagSpan * TAN_30);
+      ctx.lineTo(width + diagSpan, yAnchor + (width + diagSpan) * TAN_30);
 
       // -30 degrees
-      ctx.moveTo(-diagSpan, yAnchor + diagSpan * 0.57735);
-      ctx.lineTo(width + diagSpan, yAnchor - (width + diagSpan) * 0.57735);
+      ctx.moveTo(-diagSpan, yAnchor + diagSpan * TAN_30);
+      ctx.lineTo(width + diagSpan, yAnchor - (width + diagSpan) * TAN_30);
     }
 
     ctx.stroke();
 
-    // Origin axis cross indicator
+    // 3. Ground Origin axis cross indicator (Z = 0)
     ctx.strokeStyle = '#dee2e6';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -164,8 +174,32 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
     ctx.lineTo(viewport.panX, viewport.panY + 12);
     ctx.stroke();
 
+    // 4. Active Elevation plane indicator if Z !== 0
+    if (activeElevation !== 0) {
+      const elevY = viewport.panY - activeElevation * unit;
+      // Active elevation cross
+      ctx.strokeStyle = '#6366f1';
+      ctx.lineWidth = 1.75;
+      ctx.beginPath();
+      ctx.moveTo(viewport.panX - 12, elevY);
+      ctx.lineTo(viewport.panX + 12, elevY);
+      ctx.moveTo(viewport.panX, elevY - 12);
+      ctx.lineTo(viewport.panX, elevY + 12);
+      ctx.stroke();
+
+      // Dashed vertical riser connecting ground to active elevation plane
+      ctx.strokeStyle = '#a5b4fc';
+      ctx.lineWidth = 1.25;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(viewport.panX, viewport.panY);
+      ctx.lineTo(viewport.panX, elevY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
     ctx.restore();
-  }, [gridSettings, viewport]);
+  }, [gridSettings, viewport, activeElevation]);
 
   // 2. Draw Main Geometry Layer
   useEffect(() => {
@@ -242,7 +276,7 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
 
     ctx.save();
 
-    // 1. Draw live preview line if actively drawing
+    // 1. Draw live preview line and polar tracking if actively drawing
     if (activeTool === 'line' && activeAnchor) {
       const anchorWorld = gridToWorld(
         activeAnchor.x,
@@ -251,6 +285,24 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
         gridSettings.unitSize
       );
       const anchorScreen = worldToScreen(anchorWorld, viewport);
+
+      // Polar tracking guide ray for angle snap
+      if (snap.snapType === 'angle-snap' && snap.angleDeg !== undefined) {
+        const rad = (snap.angleDeg * Math.PI) / 180;
+        const rayLen = Math.max(width, height);
+        const rayEnd = {
+          x: anchorScreen.x + rayLen * Math.cos(rad),
+          y: anchorScreen.y - rayLen * Math.sin(rad),
+        };
+        ctx.strokeStyle = '#818cf8';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(anchorScreen.x, anchorScreen.y);
+        ctx.lineTo(rayEnd.x, rayEnd.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
 
       ctx.strokeStyle = '#111827';
       ctx.lineWidth = 1.75;
@@ -269,19 +321,50 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       ctx.fill();
     }
 
-    // 2. Snapping Target Indicator
+    // 2. Line / Edge Snap Highlight
+    if (snap.snapType === 'line-edge' && snap.snappedLineId) {
+      const targetLine = lines.find((l) => l.id === snap.snappedLineId);
+      if (targetLine) {
+        const w1 = gridToWorld(targetLine.start.x, targetLine.start.y, targetLine.start.z || 0, gridSettings.unitSize);
+        const w2 = gridToWorld(targetLine.end.x, targetLine.end.y, targetLine.end.z || 0, gridSettings.unitSize);
+        const p1 = worldToScreen(w1, viewport);
+        const p2 = worldToScreen(w2, viewport);
+
+        // Highlight line halo
+        ctx.strokeStyle = 'rgba(79, 70, 229, 0.4)';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+      }
+    }
+
+    // 3. Snapping Target Indicator
     if (activeTool === 'line' || activeTool === 'select') {
       const { x, y } = snap.screen;
 
-      // Circle indicator
-      ctx.strokeStyle = snap.snapType === 'endpoint' ? '#111827' : '#6b7280';
-      ctx.lineWidth = snap.snapType === 'endpoint' ? 2 : 1.25;
-      ctx.beginPath();
-      ctx.arc(x, y, snap.snapType === 'endpoint' ? 6 : 4, 0, Math.PI * 2);
-      ctx.stroke();
+      if (snap.snapType === 'line-edge') {
+        // Hourglass / Diamond icon for line-edge snap
+        ctx.strokeStyle = '#4f46e5';
+        ctx.lineWidth = 1.75;
+        ctx.beginPath();
+        ctx.moveTo(x - 5, y - 5);
+        ctx.lineTo(x + 5, y + 5);
+        ctx.lineTo(x - 5, y + 5);
+        ctx.lineTo(x + 5, y - 5);
+        ctx.closePath();
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = snap.snapType === 'endpoint' ? '#111827' : snap.snapType === 'angle-snap' ? '#4f46e5' : '#6b7280';
+        ctx.lineWidth = snap.snapType === 'endpoint' ? 2 : 1.25;
+        ctx.beginPath();
+        ctx.arc(x, y, snap.snapType === 'endpoint' ? 6 : 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
 
       // Precision crosshair
-      ctx.strokeStyle = '#9ca3af';
+      ctx.strokeStyle = snap.snapType === 'line-edge' ? '#818cf8' : '#9ca3af';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x - 8, y);
@@ -290,15 +373,48 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       ctx.lineTo(x, y + 8);
       ctx.stroke();
 
-      // Small solid center point
-      ctx.fillStyle = '#111827';
+      // Center dot
+      ctx.fillStyle = snap.snapType === 'line-edge' || snap.snapType === 'angle-snap' ? '#4f46e5' : '#111827';
       ctx.beginPath();
       ctx.arc(x, y, 1.5, 0, Math.PI * 2);
       ctx.fill();
+
+      // 4. Live 3D coordinate tag with plane & angle feedback
+      let tag = `X:${snap.logical.x} Y:${snap.logical.y} Z:${snap.logical.z || 0}`;
+      if (snap.snapType === 'line-edge' && snap.hostPlane) {
+        tag = `Edge [${snap.hostPlane.label}] • ${tag}`;
+      } else if (snap.snapType === 'angle-snap' && snap.angleDeg !== undefined) {
+        tag = `∠ ${snap.angleDeg}° • ${tag}`;
+      } else if (snap.hostPlane) {
+        tag = `${tag} • ${snap.hostPlane.label}`;
+      }
+
+      ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+      const textMetrics = ctx.measureText(tag);
+      const bgW = textMetrics.width + 10;
+      const bgH = 18;
+      const bgX = x + 10;
+      const bgY = y + 10;
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
+      ctx.strokeStyle = snap.snapType === 'line-edge' || snap.snapType === 'angle-snap' ? '#c7d2fe' : '#d1d5db';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(bgX, bgY, bgW, bgH, 3);
+      } else {
+        ctx.rect(bgX, bgY, bgW, bgH);
+      }
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = snap.snapType === 'line-edge' || snap.snapType === 'angle-snap' ? '#3730a3' : '#111827';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(tag, bgX + 5, bgY + bgH / 2);
     }
 
     ctx.restore();
-  }, [activeTool, activeAnchor, viewport, gridSettings.unitSize]);
+  }, [activeTool, activeAnchor, lines, viewport, gridSettings.unitSize]);
 
   // Pointer Event Handlers
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -320,6 +436,8 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       snapToIsometric: gridSettings.snapToIsometric,
       snapToEndpoints: gridSettings.snapToEndpoints,
       unitSize: gridSettings.unitSize,
+      activeElevation,
+      activeIsoplane,
     });
 
     if (activeTool === 'line') {
@@ -390,6 +508,8 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       snapToIsometric: gridSettings.snapToIsometric,
       snapToEndpoints: gridSettings.snapToEndpoints,
       unitSize: gridSettings.unitSize,
+      activeElevation,
+      activeIsoplane,
     });
 
     currentSnapRef.current = snap;
@@ -400,6 +520,7 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       logical: snap.logical,
       snapType: snap.snapType,
       angleDeg: snap.angleDeg,
+      hostPlane: snap.hostPlane,
     });
   };
 
@@ -441,6 +562,23 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
           onRemoveLine(selectedLineId);
           onSelectLine(null);
         }
+      } else if (e.key === '[' || e.key === 'PageDown') {
+        // Step active elevation down
+        e.preventDefault();
+        onSetElevation?.((activeElevation ?? 0) - 1);
+      } else if (e.key === ']' || e.key === 'PageUp') {
+        // Step active elevation up
+        e.preventDefault();
+        onSetElevation?.((activeElevation ?? 0) + 1);
+      } else if (e.key === 'F5' || (e.key === 'Tab' && !e.shiftKey)) {
+        // Cycle Isoplane (AutoCAD Standard F5: Top -> Side -> Front -> Top)
+        e.preventDefault();
+        const cycleMap: Record<IsoplaneType, IsoplaneType> = {
+          top: 'side',
+          side: 'front',
+          front: 'top',
+        };
+        onSetIsoplane?.(cycleMap[activeIsoplane || 'top']);
       }
     };
 
@@ -456,7 +594,17 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [selectedLineId, onSetAnchor, onSelectLine, onRemoveLine, renderOverlay]);
+  }, [
+    selectedLineId,
+    activeElevation,
+    activeIsoplane,
+    onSetAnchor,
+    onSelectLine,
+    onRemoveLine,
+    onSetElevation,
+    onSetIsoplane,
+    renderOverlay,
+  ]);
 
   return (
     <div

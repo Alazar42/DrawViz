@@ -12,24 +12,16 @@ export interface ViewportTransform {
 }
 
 /**
- * Converts logical grid coordinates (col, row, z) to world coordinates (in unzoomed pixels)
+ * Converts true 3D logical drafting coordinates (X: Front, Y: Side, Z: Height)
+ * to 2D isometric world coordinates (in unzoomed pixels)
  */
-export function gridToWorld(col: number, row: number, z: number = 0, unitSize: number = 28): ScreenPoint {
-  const wx = col * COS_30 * unitSize;
-  const isOdd = Math.abs(col % 2) === 1;
-  const baseWy = (row + (isOdd ? 0.5 : 0)) * unitSize;
-  const wy = baseWy - z * unitSize;
+export function gridToWorld(x: number, y: number, z: number = 0, unitSize: number = 28): ScreenPoint {
+  // Front axis X goes down-left: (-COS_30, 0.5)
+  // Side axis Y goes down-right: (COS_30, 0.5)
+  // Height axis Z goes straight up: (0, -1)
+  const wx = (y - x) * COS_30 * unitSize;
+  const wy = (x + y) * 0.5 * unitSize - z * unitSize;
   return { x: wx, y: wy };
-}
-
-/**
- * Converts world coordinates to screen pixel coordinates
- */
-export function worldToScreen(world: ScreenPoint, transform: ViewportTransform): ScreenPoint {
-  return {
-    x: world.x * transform.zoom + transform.panX,
-    y: world.y * transform.zoom + transform.panY,
-  };
 }
 
 /**
@@ -43,104 +35,131 @@ export function screenToWorld(screen: ScreenPoint, transform: ViewportTransform)
 }
 
 /**
- * Finds the exact nearest isometric grid point for any world coordinate
+ * Converts world coordinates to screen pixel coordinates
  */
-export function getNearestGridPoint(
-  worldX: number,
-  worldY: number,
-  unitSize: number = 28
-): { col: number; row: number; z: number; world: ScreenPoint } {
-  const colStep = COS_30 * unitSize;
-  const approxCol = worldX / colStep;
-  const c0 = Math.floor(approxCol);
-  const c1 = c0 + 1;
-
-  let bestDist = Infinity;
-  let bestCol = 0;
-  let bestRow = 0;
-
-  for (const c of [c0, c1]) {
-    const isOdd = Math.abs(c % 2) === 1;
-    const yOffset = isOdd ? 0.5 : 0;
-    const approxRow = worldY / unitSize - yOffset;
-    const r0 = Math.floor(approxRow);
-    const r1 = r0 + 1;
-
-    for (const r of [r0, r1]) {
-      const pt = gridToWorld(c, r, 0, unitSize);
-      const dx = pt.x - worldX;
-      const dy = pt.y - worldY;
-      const distSq = dx * dx + dy * dy;
-      if (distSq < bestDist) {
-        bestDist = distSq;
-        bestCol = c;
-        bestRow = r;
-      }
-    }
-  }
-
-  const world = gridToWorld(bestCol, bestRow, 0, unitSize);
+export function worldToScreen(world: ScreenPoint, transform: ViewportTransform): ScreenPoint {
   return {
-    col: bestCol,
-    row: bestRow,
-    z: 0,
-    world,
+    x: world.x * transform.zoom + transform.panX,
+    y: world.y * transform.zoom + transform.panY,
   };
 }
 
 /**
- * Calculate distance in logical units between two grid points
+ * Inversely projects a 2D world coordinate onto a specific elevation plane Z
+ * to find the exact logical (X, Y, Z) coordinates.
+ */
+export function worldToGridPlane(
+  worldX: number,
+  worldY: number,
+  zPlane: number = 0,
+  unitSize: number = 28
+): Point3D {
+  const u = worldX / (COS_30 * unitSize);
+  const v = (worldY + zPlane * unitSize) / (0.5 * unitSize);
+
+  const exactY = (v + u) / 2;
+  const exactX = (v - u) / 2;
+
+  return {
+    x: Math.round(exactX),
+    y: Math.round(exactY),
+    z: Math.round(zPlane),
+  };
+}
+
+export type IsoplaneType = 'top' | 'front' | 'side';
+
+/**
+ * Projects a 2D world coordinate onto an AutoCAD-standard Isoplane
+ * (Top: X-Y plane at Z_plane, Front: X-Z plane at Y_plane, Side: Y-Z plane at X_plane)
+ */
+export function worldToIsoplane(
+  worldX: number,
+  worldY: number,
+  isoplane: IsoplaneType,
+  planeOffset: number,
+  unitSize: number = 28
+): Point3D {
+  switch (isoplane) {
+    case 'top':
+      return worldToGridPlane(worldX, worldY, planeOffset, unitSize);
+
+    case 'front': {
+      // Y is fixed at planeOffset (Front vertical plane X-Z)
+      // wx = (planeOffset - X) * COS_30 * unitSize => X = planeOffset - wx / (COS_30 * unitSize)
+      // wy = (X + planeOffset) * 0.5 * unitSize - Z * unitSize => Z = (X + planeOffset) * 0.5 - wy / unitSize
+      const exactX = planeOffset - worldX / (COS_30 * unitSize);
+      const roundedX = Math.round(exactX);
+      const exactZ = (roundedX + planeOffset) * 0.5 - worldY / unitSize;
+      return {
+        x: roundedX,
+        y: Math.round(planeOffset),
+        z: Math.round(exactZ),
+      };
+    }
+
+    case 'side': {
+      // X is fixed at planeOffset (Side vertical plane Y-Z)
+      // wx = (Y - planeOffset) * COS_30 * unitSize => Y = planeOffset + wx / (COS_30 * unitSize)
+      // wy = (planeOffset + Y) * 0.5 * unitSize - Z * unitSize => Z = (planeOffset + Y) * 0.5 - wy / unitSize
+      const exactY = planeOffset + worldX / (COS_30 * unitSize);
+      const roundedY = Math.round(exactY);
+      const exactZ = (planeOffset + roundedY) * 0.5 - worldY / unitSize;
+      return {
+        x: Math.round(planeOffset),
+        y: roundedY,
+        z: Math.round(exactZ),
+      };
+    }
+  }
+}
+
+/**
+ * Calculate distance in logical 3D units between two points
  */
 export function calculateLogicalLength(start: Point3D, end: Point3D, unitSize: number = 28): number {
-  const p1 = gridToWorld(start.x, start.y, start.z, unitSize);
-  const p2 = gridToWorld(end.x, end.y, end.z, unitSize);
+  const p1 = gridToWorld(start.x, start.y, start.z || 0, unitSize);
+  const p2 = gridToWorld(end.x, end.y, end.z || 0, unitSize);
   const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
   return Math.round((dist / unitSize) * 100) / 100;
 }
 
 /**
- * Determine the principal direction label and angle of a line
+ * Determine the principal direction label and angle of a line in 3D
  */
 export function getLineDirection(
   start: Point3D,
   end: Point3D,
   unitSize: number = 28
 ): { angle: number; directionLabel: string } {
-  const p1 = gridToWorld(start.x, start.y, start.z, unitSize);
-  const p2 = gridToWorld(end.x, end.y, end.z, unitSize);
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dz = (end.z || 0) - (start.z || 0);
 
-  const dx = p2.x - p1.x;
-  const dy = p2.y - p1.y;
-
-  if (Math.hypot(dx, dy) < 0.001) {
+  if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 && Math.abs(dz) < 0.001) {
     return { angle: 0, directionLabel: 'Point' };
   }
 
-  let rad = Math.atan2(dy, dx);
-  let deg = (rad * 180) / Math.PI;
-
-  // Normalize to 0..360
-  if (deg < 0) deg += 360;
-
-  // Check orientation
-  const tolerance = 5;
-  const checkAngle = (target: number) => {
-    const diff = Math.abs(deg - target);
-    return diff <= tolerance || diff >= 360 - tolerance;
-  };
-
-  if (checkAngle(0) || checkAngle(180)) {
-    return { angle: Math.round(deg), directionLabel: 'Horizontal' };
-  }
-  if (checkAngle(90) || checkAngle(270)) {
-    return { angle: Math.round(deg), directionLabel: 'Vertical' };
-  }
-  if (checkAngle(30) || checkAngle(210)) {
-    return { angle: Math.round(deg), directionLabel: 'Isometric (+30°)' };
-  }
-  if (checkAngle(150) || checkAngle(330)) {
-    return { angle: Math.round(deg), directionLabel: 'Isometric (-30°)' };
+  // Pure vertical (Elevation)
+  if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) {
+    return { angle: 90, directionLabel: 'Vertical (Z)' };
   }
 
-  return { angle: Math.round(deg), directionLabel: 'Oblique' };
+  // Pure Front axis (X)
+  if (Math.abs(dy) < 0.001 && Math.abs(dz) < 0.001) {
+    return { angle: 150, directionLabel: 'Front Axis (X)' };
+  }
+
+  // Pure Side axis (Y)
+  if (Math.abs(dx) < 0.001 && Math.abs(dz) < 0.001) {
+    return { angle: 30, directionLabel: 'Side Axis (Y)' };
+  }
+
+  // Horizontal diagonal (X = -Y, dz = 0)
+  if (Math.abs(dx + dy) < 0.001 && Math.abs(dz) < 0.001) {
+    return { angle: 0, directionLabel: 'Horizontal (0°)' };
+  }
+
+  // Incline
+  return { angle: 0, directionLabel: 'Inclined / Ramp' };
 }

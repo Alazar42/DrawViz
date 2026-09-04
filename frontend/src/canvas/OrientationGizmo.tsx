@@ -33,15 +33,15 @@ export const OrientationGizmo: React.FC = () => {
         />
         <text
           x="43"
-          y="29"
+          y="28"
           textAnchor="middle"
-          fontSize="9"
+          fontSize="8"
           fontWeight="700"
           fill="#111827"
           fontFamily="ui-sans-serif, system-ui, -apple-system, sans-serif"
-          letterSpacing="0.08em"
+          letterSpacing="0.06em"
         >
-          TOP
+          PLANTA
         </text>
 
         {/* 2. FRONT FACE (Left side along X axis) */}
@@ -56,14 +56,14 @@ export const OrientationGizmo: React.FC = () => {
           x="30.5"
           y="50"
           textAnchor="middle"
-          fontSize="8"
+          fontSize="7"
           fontWeight="700"
           fill="#1f2937"
           fontFamily="ui-sans-serif, system-ui, -apple-system, sans-serif"
-          letterSpacing="0.08em"
+          letterSpacing="0.05em"
           transform="rotate(-18 30.5 50)"
         >
-          FRONT
+          FRONTAL
         </text>
 
         {/* 3. SIDE FACE (Right side along Y axis) */}
@@ -78,14 +78,14 @@ export const OrientationGizmo: React.FC = () => {
           x="55.5"
           y="50"
           textAnchor="middle"
-          fontSize="8"
+          fontSize="7"
           fontWeight="700"
           fill="#1f2937"
           fontFamily="ui-sans-serif, system-ui, -apple-system, sans-serif"
-          letterSpacing="0.08em"
+          letterSpacing="0.05em"
           transform="rotate(18 55.5 50)"
         >
-          SIDE
+          LATERAL
         </text>
 
         {/* Center vertex point */}

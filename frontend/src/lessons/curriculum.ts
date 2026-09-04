@@ -1,29 +1,42 @@
 import { DrawingLine, Lesson } from '../types/drawing';
 
-// Target lines for the Stepped Incline Block shown in the reference screenshot
+// Target lines for the Stepped Incline Block shown in the reference blueprint
 export const STEPPED_INCLINE_TARGET_LINES: DrawingLine[] = [
-  // Base lower front box
-  { id: 't1', start: { x: -6, y: 4, z: 0 }, end: { x: -2, y: 6, z: 0 }, layerId: 'target' },
-  { id: 't2', start: { x: -2, y: 6, z: 0 }, end: { x: 2, y: 4, z: 0 }, layerId: 'target' },
-  { id: 't3', start: { x: -6, y: 4, z: 0 }, end: { x: -6, y: 4, z: 2 }, layerId: 'target' },
-  { id: 't4', start: { x: -2, y: 6, z: 0 }, end: { x: -2, y: 6, z: 2 }, layerId: 'target' },
-  { id: 't5', start: { x: 2, y: 4, z: 0 }, end: { x: 2, y: 4, z: 2 }, layerId: 'target' },
-  { id: 't6', start: { x: -6, y: 4, z: 2 }, end: { x: -2, y: 6, z: 2 }, layerId: 'target' },
-  { id: 't7', start: { x: -2, y: 6, z: 2 }, end: { x: 2, y: 4, z: 2 }, layerId: 'target' },
+  // 1. Base Box (Z = 0 to Z = 2)
+  { id: 'b1', start: { x: -2, y: -3, z: 0 }, end: { x: 2, y: -3, z: 0 }, layerId: 'target' },
+  { id: 'b2', start: { x: 2, y: -3, z: 0 }, end: { x: 2, y: 3, z: 0 }, layerId: 'target' },
+  { id: 'b3', start: { x: 2, y: 3, z: 0 }, end: { x: -2, y: 3, z: 0 }, layerId: 'target' },
+  { id: 'b4', start: { x: -2, y: 3, z: 0 }, end: { x: -2, y: -3, z: 0 }, layerId: 'target' },
 
-  // Vertical tower back
-  { id: 't8', start: { x: -4, y: 0, z: 2 }, end: { x: -4, y: 0, z: 8 }, layerId: 'target' },
-  { id: 't9', start: { x: -4, y: 0, z: 8 }, end: { x: 0, y: -2, z: 8 }, layerId: 'target' },
-  { id: 't10', start: { x: 0, y: -2, z: 8 }, end: { x: 4, y: 0, z: 8 }, layerId: 'target' },
-  { id: 't11', start: { x: 0, y: 2, z: 8 }, end: { x: 4, y: 0, z: 8 }, layerId: 'target' },
-  { id: 't12', start: { x: -4, y: 0, z: 8 }, end: { x: 0, y: 2, z: 8 }, layerId: 'target' },
-  { id: 't13', start: { x: 0, y: 2, z: 8 }, end: { x: 0, y: 2, z: 5 }, layerId: 'target' },
-  { id: 't14', start: { x: 0, y: 2, z: 5 }, end: { x: 4, y: 4, z: 5 }, layerId: 'target' },
+  // Base vertical corner risers
+  { id: 'b5', start: { x: -2, y: -3, z: 0 }, end: { x: -2, y: -3, z: 2 }, layerId: 'target' },
+  { id: 'b6', start: { x: 2, y: -3, z: 0 }, end: { x: 2, y: -3, z: 2 }, layerId: 'target' },
+  { id: 'b7', start: { x: 2, y: 3, z: 0 }, end: { x: 2, y: 3, z: 2 }, layerId: 'target' },
+  { id: 'b8', start: { x: -2, y: 3, z: 0 }, end: { x: -2, y: 3, z: 2 }, layerId: 'target' },
 
-  // Angled Incline / Wedge
-  { id: 't15', start: { x: 0, y: 2, z: 5 }, end: { x: 4, y: 8, z: 0 }, layerId: 'target' },
-  { id: 't16', start: { x: 4, y: 4, z: 5 }, end: { x: 8, y: 10, z: 0 }, layerId: 'target' },
-  { id: 't17', start: { x: 4, y: 8, z: 0 }, end: { x: 8, y: 10, z: 0 }, layerId: 'target' },
+  // Base front top edge
+  { id: 'b9', start: { x: -2, y: 3, z: 2 }, end: { x: 2, y: 3, z: 2 }, layerId: 'target' },
+
+  // 2. Vertical Tower (Z = 2 to Z = 8, Y from -3 to 0)
+  { id: 't1', start: { x: -2, y: -3, z: 2 }, end: { x: -2, y: -3, z: 8 }, layerId: 'target' },
+  { id: 't2', start: { x: 2, y: -3, z: 2 }, end: { x: 2, y: -3, z: 8 }, layerId: 'target' },
+  { id: 't3', start: { x: -2, y: 0, z: 2 }, end: { x: -2, y: 0, z: 8 }, layerId: 'target' },
+  { id: 't4', start: { x: 2, y: 0, z: 2 }, end: { x: 2, y: 0, z: 8 }, layerId: 'target' },
+
+  // Tower top face
+  { id: 't5', start: { x: -2, y: -3, z: 8 }, end: { x: 2, y: -3, z: 8 }, layerId: 'target' },
+  { id: 't6', start: { x: 2, y: -3, z: 8 }, end: { x: 2, y: 0, z: 8 }, layerId: 'target' },
+  { id: 't7', start: { x: 2, y: 0, z: 8 }, end: { x: -2, y: 0, z: 8 }, layerId: 'target' },
+  { id: 't8', start: { x: -2, y: 0, z: 8 }, end: { x: -2, y: -3, z: 8 }, layerId: 'target' },
+
+  // 3. Step Platform (Z = 5, Y from 0 to 1)
+  { id: 's1', start: { x: -2, y: 0, z: 5 }, end: { x: -2, y: 1, z: 5 }, layerId: 'target' },
+  { id: 's2', start: { x: 2, y: 0, z: 5 }, end: { x: 2, y: 1, z: 5 }, layerId: 'target' },
+  { id: 's3', start: { x: -2, y: 1, z: 5 }, end: { x: 2, y: 1, z: 5 }, layerId: 'target' },
+
+  // 4. Incline / Ramp Face (from Y = 1, Z = 5 down to Y = 3, Z = 2)
+  { id: 'r1', start: { x: -2, y: 1, z: 5 }, end: { x: -2, y: 3, z: 2 }, layerId: 'target' },
+  { id: 'r2', start: { x: 2, y: 1, z: 5 }, end: { x: 2, y: 3, z: 2 }, layerId: 'target' },
 ];
 
 export const CURRICULUM: Lesson[] = [

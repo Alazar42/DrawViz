@@ -8,6 +8,7 @@ interface OrthoViewportProps {
   lines: DrawingLine[];
   selectedLineId?: string | null;
   onSelectLine?: (lineId: string | null) => void;
+  hideOccluded?: boolean;
 }
 
 // Distance from point to line segment in screen pixels
@@ -28,6 +29,7 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
   lines,
   selectedLineId,
   onSelectLine,
+  hideOccluded = true,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -70,8 +72,8 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
     }
     ctx.stroke();
 
-    // 2. Project geometry lines using Virtual Camera
-    const { projectedLines } = projectToOrthoView(lines, viewType, { width, height }, 14);
+    // 2. Project geometry lines using Virtual Camera and Occlusion
+    const { projectedLines } = projectToOrthoView(lines, viewType, { width, height }, 14, { hideOccluded });
     projectedLinesRef.current = projectedLines;
 
     ctx.lineCap = 'round';

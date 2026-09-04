@@ -8,7 +8,8 @@ import {
   ScreenPoint,
   ToolType,
 } from '../types/drawing';
-import { ViewportTransform } from '../geometry/isometric';
+import { ViewportTransform, IsoplaneType } from '../geometry/isometric';
+import { HostPlaneInfo } from '../geometry/snapping';
 import { CURRICULUM, STEPPED_INCLINE_TARGET_LINES } from '../lessons/curriculum';
 
 export interface CursorState {
@@ -16,6 +17,7 @@ export interface CursorState {
   logical: Point3D;
   snapType: string;
   angleDeg?: number;
+  hostPlane?: HostPlaneInfo;
 }
 
 const DEFAULT_LAYERS: Layer[] = [
@@ -58,6 +60,8 @@ export function useDrawingState() {
   const [appMode, setAppMode] = useState<AppMode>('practice');
   const [activeLessonId, setActiveLessonId] = useState<string>('challenge-1');
   const [showOrthoPanel, setShowOrthoPanel] = useState<boolean>(true);
+  const [activeElevation, setActiveElevation] = useState<number>(0);
+  const [activeIsoplane, setActiveIsoplane] = useState<IsoplaneType>('top');
 
   // History stack for Undo/Redo
   const [undoStack, setUndoStack] = useState<DrawingLine[][]>([]);
@@ -205,5 +209,9 @@ export function useDrawingState() {
     canUndo: undoStack.length > 0,
     canRedo: redoStack.length > 0,
     resetCanvas,
+    activeElevation,
+    setActiveElevation,
+    activeIsoplane,
+    setActiveIsoplane,
   };
 }

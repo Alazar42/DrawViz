@@ -1,5 +1,6 @@
 import React from 'react';
 import { ToolType, GridSettings, AppMode } from '../types/drawing';
+import { IsoplaneType } from '../geometry/isometric';
 import {
   PenLine,
   Eraser,
@@ -9,9 +10,11 @@ import {
   BookOpen,
   Trophy,
   Activity,
-  Layers,
   Magnet,
   Grid,
+  Layers,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 
 interface ToolPanelProps {
@@ -21,6 +24,10 @@ interface ToolPanelProps {
   onUpdateGridSettings: (settings: Partial<GridSettings>) => void;
   appMode: AppMode;
   onSetAppMode: (mode: AppMode) => void;
+  activeElevation: number;
+  onSetElevation: (elevation: number) => void;
+  activeIsoplane: IsoplaneType;
+  onSetIsoplane: (isoplane: IsoplaneType) => void;
 }
 
 export const ToolPanel: React.FC<ToolPanelProps> = ({
@@ -30,6 +37,10 @@ export const ToolPanel: React.FC<ToolPanelProps> = ({
   onUpdateGridSettings,
   appMode,
   onSetAppMode,
+  activeElevation,
+  onSetElevation,
+  activeIsoplane,
+  onSetIsoplane,
 }) => {
   const tools: { id: ToolType; label: string; icon: React.ReactNode; shortcut: string }[] = [
     { id: 'line', label: 'Line', icon: <PenLine size={16} />, shortcut: 'L' },
@@ -184,6 +195,155 @@ export const ToolPanel: React.FC<ToolPanelProps> = ({
                 style={{ cursor: 'pointer', accentColor: '#111827' }}
               />
             </label>
+          </div>
+        </div>
+
+        {/* DRAFTING PLANE Section */}
+        <div>
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: '#9ca3af',
+              letterSpacing: '0.06em',
+              marginBottom: 8,
+              paddingLeft: 4,
+              textTransform: 'uppercase',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            <Layers size={11} />
+            <span>Drafting Plane</span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {/* Elevation Stepper */}
+            <div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  fontSize: 11,
+                  color: '#374151',
+                  marginBottom: 4,
+                  padding: '0 4px',
+                }}
+              >
+                <span>Elevation (Z)</span>
+                <span style={{ fontSize: 9, color: '#9ca3af' }}>[ / ]</span>
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  backgroundColor: '#f9fafb',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 4,
+                  padding: '2px 4px',
+                }}
+              >
+                <button
+                  onClick={() => onSetElevation(activeElevation - 1)}
+                  title="Lower Elevation Plane ([)"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '2px 4px',
+                    borderRadius: 3,
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: '#4b5563',
+                  }}
+                >
+                  <ChevronDown size={14} />
+                </button>
+                <span
+                  style={{
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: activeElevation !== 0 ? '#4f46e5' : '#111827',
+                  }}
+                >
+                  {activeElevation >= 0 ? `+${activeElevation}` : activeElevation}
+                </span>
+                <button
+                  onClick={() => onSetElevation(activeElevation + 1)}
+                  title="Raise Elevation Plane (])"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '2px 4px',
+                    borderRadius: 3,
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: '#4b5563',
+                  }}
+                >
+                  <ChevronUp size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* Isoplane Switcher (F5) */}
+            <div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  fontSize: 11,
+                  color: '#374151',
+                  marginBottom: 4,
+                  padding: '0 4px',
+                }}
+              >
+                <span>Isoplane</span>
+                <span style={{ fontSize: 9, color: '#9ca3af' }}>F5</span>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: 2,
+                  backgroundColor: '#f3f4f6',
+                  padding: 2,
+                  borderRadius: 4,
+                  border: '1px solid #e5e7eb',
+                }}
+              >
+                {(['top', 'front', 'side'] as const).map((iso) => {
+                  const isCur = activeIsoplane === iso;
+                  return (
+                    <button
+                      key={iso}
+                      onClick={() => onSetIsoplane(iso)}
+                      style={{
+                        padding: '3px 0',
+                        fontSize: 9,
+                        fontWeight: isCur ? 700 : 500,
+                        border: 'none',
+                        borderRadius: 3,
+                        cursor: 'pointer',
+                        backgroundColor: isCur ? '#ffffff' : 'transparent',
+                        color: isCur ? '#111827' : '#6b7280',
+                        boxShadow: isCur ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+                        textTransform: 'uppercase',
+                      }}
+                      title={`Switch to ${iso.toUpperCase()} Isoplane (F5)`}
+                    >
+                      {iso}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
 

@@ -1,177 +1,170 @@
 import { DrawingLine, Point3D, ScreenPoint } from '../types/drawing';
-import { gridToWorld, COS_30 } from './isometric';
 
 export interface OrthoLine2D {
   id: string;
   start: ScreenPoint;
   end: ScreenPoint;
   layerId: string;
-  depth: number; // Camera depth for front-line priority
+  depth: number; // Camera depth for front-line priority selection
+  isOccluded?: boolean;
 }
 
 export type OrthoViewType = 'top' | 'front' | 'side';
 
-export interface Point3DResolved {
-  x: number;
-  y: number;
-  z: number;
+interface PlanarFace {
+  vertices: Point3D[];
+  normal: { x: number; y: number; z: number };
+  planeDist: number; // n . p = D
+  lineIds: Set<string>;
+}
+
+// Helper: Point in 2D polygon test
+function isPointInsidePoly(pt: ScreenPoint, poly: ScreenPoint[], boundaryTolerance = 0.04): boolean {
+  // Check if point is right on boundary
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const p1 = poly[i];
+    const p2 = poly[j];
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq > 0.0001) {
+      const t = Math.max(0, Math.min(1, ((pt.x - p1.x) * dx + (pt.y - p1.y) * dy) / lenSq));
+      const projX = p1.x + t * dx;
+      const projY = p1.y + t * dy;
+      const dist = Math.hypot(pt.x - projX, pt.y - projY);
+      if (dist < boundaryTolerance) {
+        return false; // On boundary, not strictly inside
+      }
+    }
+  }
+
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y;
+    const xj = poly[j].x, yj = poly[j].y;
+    const intersect = yi > pt.y !== yj > pt.y && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
 
 /**
- * Resolves true 3D spatial coordinates (X, Y, Z) from drawn 2D isometric lines
+ * Extracts planar faces (triangles and quadrilaterals) from connected lines
  */
-export function resolve3DCoordinates(
-  lines: DrawingLine[],
-  unitSize: number = 28
-): Map<string, Point3DResolved> {
-  const coordMap = new Map<string, Point3DResolved>();
-  if (lines.length === 0) return coordMap;
+function extractPlanarFaces(lines: DrawingLine[]): PlanarFace[] {
+  const faces: PlanarFace[] = [];
+  const ptKey = (p: Point3D) => `${p.x},${p.y},${p.z || 0}`;
 
-  const keyOf = (p: Point3D) =>
-    `${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10},${Math.round((p.z || 0) * 10) / 10}`;
-
-  // Build adjacency graph of vertices
-  interface Edge {
-    toKey: string;
-    toPt: Point3D;
-    fromPt: Point3D;
-  }
-  const adj = new Map<string, Edge[]>();
+  // Build adjacency
+  const adj = new Map<string, { pt: Point3D; neighbors: { pt: Point3D; lineId: string }[] }>();
 
   for (const line of lines) {
-    const k1 = keyOf(line.start);
-    const k2 = keyOf(line.end);
-    if (!adj.has(k1)) adj.set(k1, []);
-    if (!adj.has(k2)) adj.set(k2, []);
-    adj.get(k1)!.push({ toKey: k2, toPt: line.end, fromPt: line.start });
-    adj.get(k2)!.push({ toKey: k1, toPt: line.start, fromPt: line.end });
+    const k1 = ptKey(line.start);
+    const k2 = ptKey(line.end);
+    if (!adj.has(k1)) adj.set(k1, { pt: line.start, neighbors: [] });
+    if (!adj.has(k2)) adj.set(k2, { pt: line.end, neighbors: [] });
+    adj.get(k1)!.neighbors.push({ pt: line.end, lineId: line.id });
+    adj.get(k2)!.neighbors.push({ pt: line.start, lineId: line.id });
   }
 
-  const visited = new Set<string>();
+  const seenCycleKeys = new Set<string>();
 
-  // Determine 3D displacement for an edge using dot-product axis alignment
-  const get3DDelta = (pFrom: Point3D, pTo: Point3D): { dx: number; dy: number; dz: number } => {
-    const zFrom = pFrom.z || 0;
-    const zTo = pTo.z || 0;
-    const dzDirect = zTo - zFrom;
+  // Find 3-cycles and 4-cycles
+  for (const [k0, node0] of adj.entries()) {
+    const p0 = node0.pt;
+    for (const edge0 of node0.neighbors) {
+      const p1 = edge0.pt;
+      const k1 = ptKey(p1);
+      const node1 = adj.get(k1)!;
 
-    const w1 = gridToWorld(pFrom.x, pFrom.y, 0, unitSize);
-    const w2 = gridToWorld(pTo.x, pTo.y, 0, unitSize);
+      for (const edge1 of node1.neighbors) {
+        const p2 = edge1.pt;
+        const k2 = ptKey(p2);
+        if (k2 === k0) continue;
+        const node2 = adj.get(k2)!;
 
-    const dwx = (w2.x - w1.x) / unitSize;
-    const dwy = (w2.y - w1.y) / unitSize;
-    const len = Math.hypot(dwx, dwy);
+        // Check 3-cycle (Triangle)
+        for (const edge2 of node2.neighbors) {
+          if (ptKey(edge2.pt) === k0) {
+            const sortedKeys = [k0, k1, k2].sort().join('|');
+            if (!seenCycleKeys.has(sortedKeys)) {
+              seenCycleKeys.add(sortedKeys);
+              // Compute normal
+              const v1x = p1.x - p0.x, v1y = p1.y - p0.y, v1z = (p1.z || 0) - (p0.z || 0);
+              const v2x = p2.x - p0.x, v2y = p2.y - p0.y, v2z = (p2.z || 0) - (p0.z || 0);
+              const nx = v1y * v2z - v1z * v2y;
+              const ny = v1z * v2x - v1x * v2z;
+              const nz = v1x * v2y - v1y * v2x;
+              const len = Math.hypot(nx, ny, nz);
+              if (len > 0.001) {
+                const norm = { x: nx / len, y: ny / len, z: nz / len };
+                const planeDist = norm.x * p0.x + norm.y * p0.y + norm.z * (p0.z || 0);
+                faces.push({
+                  vertices: [p0, p1, p2],
+                  normal: norm,
+                  planeDist,
+                  lineIds: new Set([edge0.lineId, edge1.lineId, edge2.lineId]),
+                });
+              }
+            }
+          }
+        }
 
-    if (len < 0.001) {
-      return { dx: 0, dy: 0, dz: 0 };
-    }
+        // Check 4-cycle (Quadrilateral)
+        for (const edge2 of node2.neighbors) {
+          const p3 = edge2.pt;
+          const k3 = ptKey(p3);
+          if (k3 === k0 || k3 === k1) continue;
+          const node3 = adj.get(k3);
+          if (!node3) continue;
 
-    const vx = dwx / len;
-    const vy = dwy / len;
-
-    // Dot product with principal axes:
-    // Z axis: (0, -1)
-    const dotZ = -vy;
-    // Front X axis (down-left): (-COS_30, 0.5)
-    const dotX = -vx * COS_30 + vy * 0.5;
-    // Side Y axis (down-right): (COS_30, 0.5)
-    const dotY = vx * COS_30 + vy * 0.5;
-
-    // 1. Vertical line (Z axis)
-    if (Math.abs(dotZ) > 0.88 || Math.abs(dwx) < 0.05) {
-      return { dx: 0, dy: 0, dz: -dwy };
-    }
-
-    // 2. Front X axis (down-left: +X, up-right: -X)
-    if (Math.abs(dotX) > 0.88) {
-      return { dx: -dwx / COS_30, dy: 0, dz: dzDirect };
-    }
-
-    // 3. Side Y axis (down-right: +Y, up-left: -Y)
-    if (Math.abs(dotY) > 0.88) {
-      return { dx: 0, dy: dwx / COS_30, dz: dzDirect };
-    }
-
-    // 4. Horizontal line in X-Y plane
-    if (Math.abs(vx) > 0.92 || Math.abs(dwy) < 0.05) {
-      const dy = dwx / (2 * COS_30);
-      return { dx: -dy, dy, dz: dzDirect };
-    }
-
-    // 5. Incline / Oblique edge:
-    const diff = dwx / COS_30;
-    if (Math.abs(dwx) > 0.08) {
-      if (dwx > 0 && dwy > 0) {
-        // Down-right slope (Y-Z plane)
-        const dy = diff;
-        const dz = dy * 0.5 - dwy;
-        return { dx: 0, dy, dz };
-      } else if (dwx < 0 && dwy > 0) {
-        // Down-left slope (X-Z plane)
-        const dx = -diff;
-        const dz = dx * 0.5 - dwy;
-        return { dx, dy: 0, dz };
-      } else if (dwx > 0 && dwy < 0) {
-        // Up-right slope
-        const dy = diff;
-        const dz = dy * 0.5 - dwy;
-        return { dx: 0, dy, dz };
-      } else {
-        const dx = -diff;
-        const dz = dx * 0.5 - dwy;
-        return { dx, dy: 0, dz };
-      }
-    }
-
-    return { dx: 0, dy: 0, dz: -dwy };
-  };
-
-  // Traverse connected components
-  for (const [startKey, edges] of adj.entries()) {
-    if (visited.has(startKey)) continue;
-
-    // Initialize root of component
-    const rootPt = edges[0].fromPt;
-    coordMap.set(startKey, {
-      x: 0,
-      y: 0,
-      z: rootPt.z || 0,
-    });
-    visited.add(startKey);
-
-    const queue: string[] = [startKey];
-
-    while (queue.length > 0) {
-      const currKey = queue.shift()!;
-      const curr3D = coordMap.get(currKey)!;
-      const neighborEdges = adj.get(currKey) || [];
-
-      for (const edge of neighborEdges) {
-        if (!visited.has(edge.toKey)) {
-          const delta = get3DDelta(edge.fromPt, edge.toPt);
-          coordMap.set(edge.toKey, {
-            x: Math.round((curr3D.x + delta.dx) * 100) / 100,
-            y: Math.round((curr3D.y + delta.dy) * 100) / 100,
-            z: Math.round((curr3D.z + delta.dz) * 100) / 100,
-          });
-          visited.add(edge.toKey);
-          queue.push(edge.toKey);
+          for (const edge3 of node3.neighbors) {
+            if (ptKey(edge3.pt) === k0) {
+              const sortedKeys = [k0, k1, k2, k3].sort().join('|');
+              if (!seenCycleKeys.has(sortedKeys)) {
+                seenCycleKeys.add(sortedKeys);
+                // Compute normal
+                const v1x = p1.x - p0.x, v1y = p1.y - p0.y, v1z = (p1.z || 0) - (p0.z || 0);
+                const v2x = p2.x - p0.x, v2y = p2.y - p0.y, v2z = (p2.z || 0) - (p0.z || 0);
+                const nx = v1y * v2z - v1z * v2y;
+                const ny = v1z * v2x - v1x * v2z;
+                const nz = v1x * v2y - v1y * v2x;
+                const len = Math.hypot(nx, ny, nz);
+                if (len > 0.001) {
+                  const norm = { x: nx / len, y: ny / len, z: nz / len };
+                  const planeDist = norm.x * p0.x + norm.y * p0.y + norm.z * (p0.z || 0);
+                  // Check coplanarity of p3
+                  const distP3 = Math.abs(norm.x * p3.x + norm.y * p3.y + norm.z * (p3.z || 0) - planeDist);
+                  if (distP3 < 0.05) {
+                    faces.push({
+                      vertices: [p0, p1, p2, p3],
+                      normal: norm,
+                      planeDist,
+                      lineIds: new Set([edge0.lineId, edge1.lineId, edge2.lineId, edge3.lineId]),
+                    });
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
   }
 
-  return coordMap;
+  return faces;
 }
 
 /**
- * Projects 3D/isometric lines to 2D true orthographic technical drawing views using standard Virtual Cameras
+ * Projects true 3D lines (X, Y, Z) directly to 2D technical orthographic views
+ * using precise Virtual Camera transformations and plane occlusion (Hidden Line Removal).
  */
 export function projectToOrthoView(
   lines: DrawingLine[],
   viewType: OrthoViewType,
   bounds: { width: number; height: number },
-  gridCellSize: number = 20
+  gridCellSize: number = 20,
+  options: { hideOccluded?: boolean } = { hideOccluded: true }
 ): { projectedLines: OrthoLine2D[]; viewBox: { minX: number; minY: number; maxX: number; maxY: number } } {
   if (lines.length === 0) {
     return {
@@ -180,54 +173,103 @@ export function projectToOrthoView(
     };
   }
 
-  const keyOf = (p: Point3D) =>
-    `${Math.round(p.x * 10) / 10},${Math.round(p.y * 10) / 10},${Math.round((p.z || 0) * 10) / 10}`;
+  const projectPoint = (pt: Point3D): { u: number; v: number; depth: number } => {
+    const x = pt.x;
+    const y = pt.y;
+    const z = pt.z || 0;
 
-  const coord3DMap = resolve3DCoordinates(lines);
+    switch (viewType) {
+      case 'front':
+        // FRONTAL: looking from front +X towards -X
+        // Horizontal: Y, Vertical: -Z, Depth: X (higher X is closer to front camera)
+        return { u: y, v: -z, depth: x };
 
-  // Convert each line to 2D true orthographic projection using Virtual Camera coordinates
-  const projected2D: { id: string; p1: ScreenPoint; p2: ScreenPoint; layerId: string; depth: number }[] = [];
+      case 'side':
+        // LATERAL: looking from right side +Y towards -Y
+        // Horizontal: -X, Vertical: -Z, Depth: Y (higher Y is closer to side camera)
+        return { u: -x, v: -z, depth: y };
 
+      case 'top':
+        // PLANTA: looking down from +Z onto horizontal plane
+        // Horizontal: Y, Vertical: X, Depth: Z (higher Z is closer to top camera)
+        return { u: y, v: x, depth: z };
+    }
+  };
+
+  // 1. Detect Planar Faces for Occlusion Testing
+  const planarFaces = extractPlanarFaces(lines);
+
+  interface ProjectedFace {
+    poly2D: ScreenPoint[];
+    lineIds: Set<string>;
+    depthAtPt: (u: number, v: number) => number | null;
+    avgDepth: number;
+  }
+
+  const projectedFaces: ProjectedFace[] = [];
+
+  for (const face of planarFaces) {
+    const pts = face.vertices.map(projectPoint);
+    const poly2D: ScreenPoint[] = pts.map((p) => ({ x: p.u, y: p.v }));
+    const avgDepth = pts.reduce((sum, p) => sum + p.depth, 0) / pts.length;
+
+    // Check if face is facing or inclined towards camera
+    let facingWeight = 0;
+    if (viewType === 'front') facingWeight = Math.abs(face.normal.x);
+    else if (viewType === 'side') facingWeight = Math.abs(face.normal.y);
+    else facingWeight = Math.abs(face.normal.z);
+
+    // If face is perpendicular to camera view, its 2D area collapses to a line, so it doesn't occlude
+    if (facingWeight < 0.05) continue;
+
+    const depthAtPt = (u: number, v: number): number | null => {
+      const { normal, planeDist } = face;
+      if (viewType === 'front') {
+        if (Math.abs(normal.x) < 0.01) return null;
+        // u = Y, v = -Z => Y = u, Z = -v. X = (planeDist - normal.y*u + normal.z*v) / normal.x
+        return (planeDist - normal.y * u + normal.z * v) / normal.x;
+      } else if (viewType === 'side') {
+        if (Math.abs(normal.y) < 0.01) return null;
+        // u = -X, v = -Z => X = -u, Z = -v. Y = (planeDist + normal.x*u + normal.z*v) / normal.y
+        return (planeDist + normal.x * u + normal.z * v) / normal.y;
+      } else {
+        // 'top'
+        if (Math.abs(normal.z) < 0.01) return null;
+        // u = Y, v = X => Y = u, X = v. Z = (planeDist - normal.x*v - normal.y*u) / normal.z
+        return (planeDist - normal.x * v - normal.y * u) / normal.z;
+      }
+    };
+
+    projectedFaces.push({
+      poly2D,
+      lineIds: face.lineIds,
+      depthAtPt,
+      avgDepth,
+    });
+  }
+
+  // 2. Project Each Line Segment
   let minU = Infinity,
     minV = Infinity,
     maxU = -Infinity,
     maxV = -Infinity;
 
-  const projectCamera = (pt3D: Point3DResolved): { u: number; v: number; depth: number } => {
-    switch (viewType) {
-      case 'front':
-        // FRONT CAMERA (looking from front +X to back -X)
-        // Horizontal: Y (width across front view)
-        // Vertical: -Z (height, upward is negative canvas Y)
-        // Depth: X (larger X is closer to front camera)
-        return { u: pt3D.y, v: -pt3D.z, depth: pt3D.x };
-
-      case 'side':
-        // SIDE CAMERA (looking from right side +Y to left -Y)
-        // Horizontal: -X (front +X is on the LEFT, back -X is on the RIGHT)
-        // Vertical: -Z (height)
-        // Depth: Y (larger Y is closer to side camera)
-        return { u: -pt3D.x, v: -pt3D.z, depth: pt3D.y };
-
-      case 'top':
-        // TOP CAMERA (looking from top +Z down to -Z)
-        // Horizontal: Y (strictly aligns with Front view horizontal axis)
-        // Vertical: +X (inverted up-down as requested)
-        // Depth: Z (larger Z is closer to top camera)
-        return { u: pt3D.y, v: pt3D.x, depth: pt3D.z };
-    }
-  };
+  const rawProjected: {
+    id: string;
+    p1: ScreenPoint;
+    p2: ScreenPoint;
+    layerId: string;
+    depth: number;
+    isOccluded: boolean;
+  }[] = [];
 
   for (const line of lines) {
-    const pt3D_1 = coord3DMap.get(keyOf(line.start)) || { x: line.start.x, y: line.start.y, z: line.start.z || 0 };
-    const pt3D_2 = coord3DMap.get(keyOf(line.end)) || { x: line.end.x, y: line.end.y, z: line.end.z || 0 };
+    const c1 = projectPoint(line.start);
+    const c2 = projectPoint(line.end);
 
-    const c1 = projectCamera(pt3D_1);
-    const c2 = projectCamera(pt3D_2);
-
+    // Filter out lines perpendicular to camera view that collapse to a single point
     const len = Math.hypot(c2.u - c1.u, c2.v - c1.v);
-    if (len < 0.05) {
-      // Perpendicular to camera view: projects to a point
+    if (len < 0.01) {
       continue;
     }
 
@@ -238,24 +280,49 @@ export function projectToOrthoView(
 
     const avgDepth = (c1.depth + c2.depth) / 2;
 
-    projected2D.push({
+    // Occlusion Test: Is this line segment occluded by any foreground planar face?
+    let isOccluded = false;
+    const midU = (c1.u + c2.u) / 2;
+    const midV = (c1.v + c2.v) / 2;
+    const midPt: ScreenPoint = { x: midU, y: midV };
+
+    for (const face of projectedFaces) {
+      // An edge that belongs to this face is not occluded by this face
+      if (face.lineIds.has(line.id)) continue;
+
+      // Test if midpoint is inside the projected polygon
+      if (isPointInsidePoly(midPt, face.poly2D, 0.05)) {
+        const faceDepth = face.depthAtPt(midU, midV);
+        // If face is strictly in front of the line (larger depth = closer to camera)
+        if (faceDepth !== null && faceDepth > avgDepth + 0.08) {
+          isOccluded = true;
+          break;
+        }
+      }
+    }
+
+    rawProjected.push({
       id: line.id,
       p1: { x: c1.u, y: c1.v },
       p2: { x: c2.u, y: c2.v },
       layerId: line.layerId,
       depth: avgDepth,
+      isOccluded,
     });
   }
 
-  if (projected2D.length === 0) {
+  // Filter out occluded lines if hideOccluded is enabled (reference app style)
+  const visibleLines = options.hideOccluded ? rawProjected.filter((l) => !l.isOccluded) : rawProjected;
+
+  if (visibleLines.length === 0) {
     return {
       projectedLines: [],
       viewBox: { minX: 0, minY: 0, maxX: bounds.width, maxY: bounds.height },
     };
   }
 
-  // Sort by depth so front-most lines appear on top
-  projected2D.sort((a, b) => a.depth - b.depth);
+  // Sort by depth so front-most lines render on top
+  visibleLines.sort((a, b) => a.depth - b.depth);
 
   // Center and scale the projection in the given viewport bounds
   const spanU = maxU - minU || 1;
@@ -272,7 +339,7 @@ export function projectToOrthoView(
   const cx = bounds.width / 2;
   const cy = bounds.height / 2;
 
-  const projectedLines: OrthoLine2D[] = projected2D.map((item) => ({
+  const projectedLines: OrthoLine2D[] = visibleLines.map((item) => ({
     id: item.id,
     start: {
       x: cx + (item.p1.x - centerU) * actualCell,
@@ -284,6 +351,7 @@ export function projectToOrthoView(
     },
     layerId: item.layerId,
     depth: item.depth,
+    isOccluded: item.isOccluded,
   }));
 
   return {
