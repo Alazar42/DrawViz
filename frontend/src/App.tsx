@@ -97,9 +97,27 @@ export const App: React.FC = () => {
         return;
       }
 
-      if (e.key.toLowerCase() === 'g' && !modKey) {
+      if (e.shiftKey && e.key.toLowerCase() === 'g' && !modKey) {
         state.setGroupMode(!state.groupMode);
         setStatusMessage(`Group Transform Mode: ${!state.groupMode ? 'ON (Move entire group together)' : 'OFF (Move single element)'}`);
+        return;
+      }
+
+      if (e.key.toLowerCase() === 'g' && !modKey) {
+        state.setGizmoMode('translate');
+        setStatusMessage('Gizmo: Move (G)');
+        return;
+      }
+
+      if (e.key.toLowerCase() === 'r' && !modKey) {
+        state.setGizmoMode('rotate');
+        setStatusMessage('Gizmo: Rotate (R)');
+        return;
+      }
+
+      if (e.key.toLowerCase() === 's' && !modKey) {
+        state.setGizmoMode('scale');
+        setStatusMessage('Gizmo: Scale (S)');
         return;
       }
 
@@ -338,7 +356,9 @@ export const App: React.FC = () => {
       });
 
       state.createGroup('Cube Mesh', 'mesh', memberIds);
-      setStatusMessage('Added 3D Cube Mesh (Grouped)');
+      state.setSelectedLineId(memberIds[0]);
+      state.setActiveTool('select');
+      setStatusMessage('Added 3D Cube Mesh (Grouped & Selected)');
     } else if (type === 'cylinder') {
       const cylId = `cylinder-${now}-${Math.floor(Math.random() * 1000)}`;
       const groupId = `group-cylinder-${now}`;
@@ -354,7 +374,9 @@ export const App: React.FC = () => {
       };
       state.addCylinder(newCyl);
       state.createGroup('Cylinder Mesh', 'mesh', [cylId]);
-      setStatusMessage('Added 3D Cylinder Mesh (Grouped)');
+      state.setSelectedCylinderId(cylId);
+      state.setActiveTool('select');
+      setStatusMessage('Added 3D Cylinder Mesh (Grouped & Selected)');
     } else if (type === 'sphere') {
       const c = { x: x0 + s / 2, y: y0 + s / 2, z: z0 + s / 2 };
       const r = 3;
@@ -371,7 +393,9 @@ export const App: React.FC = () => {
       };
       state.addSphere(newSphere);
       state.createGroup('Sphere Mesh', 'mesh', [sphId]);
-      setStatusMessage('Added 3D Solid Sphere (Grouped)');
+      state.setSelectedSphereId(sphId);
+      state.setActiveTool('select');
+      setStatusMessage('Added 3D Solid Sphere (Grouped & Selected)');
     }
   };
 
@@ -567,6 +591,10 @@ export const App: React.FC = () => {
               onSetTheme={state.setTheme}
               onOpenSettings={() => setIsSettingsOpen(true)}
               onTranslateEntity={state.translateEntity}
+              onRotateEntity={state.rotateEntity}
+              onScaleEntity={state.scaleEntity}
+              gizmoMode={state.gizmoMode}
+              onSetGizmoMode={state.setGizmoMode}
               onCommitTransform={state.commitTransform}
               groupMode={state.groupMode}
               groups={state.groups}

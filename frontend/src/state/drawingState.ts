@@ -92,6 +92,7 @@ export function useDrawingState() {
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('edge');
   const [selectedVertex, setSelectedVertex] = useState<Point3D | null>(null);
   const [selectedFace, setSelectedFace] = useState<Face3D | null>(null);
+  const [gizmoMode, setGizmoMode] = useState<'translate' | 'rotate' | 'scale'>('translate');
 
   const [theme, setTheme] = useState<AppTheme>(() => {
     try {
@@ -119,19 +120,27 @@ export function useDrawingState() {
     } catch {}
   }, []);
 
-  // Keyboard shortcut listener for Blender-style 1, 2, 3 modes
+  // Keyboard shortcut listener for Blender-style 1, 2, 3 modes & G, R, S gizmo modes
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
         return;
       }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
       if (e.key === '1') {
         setSelectionMode('vertex');
       } else if (e.key === '2') {
         setSelectionMode('edge');
       } else if (e.key === '3') {
         setSelectionMode('face');
+      } else if (e.key === 'g' || e.key === 'G') {
+        setGizmoMode('translate');
+      } else if (e.key === 'r' || e.key === 'R') {
+        setGizmoMode('rotate');
+      } else if (e.key === 's' || e.key === 'S') {
+        setGizmoMode('scale');
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -555,6 +564,256 @@ export function useDrawingState() {
     [groupMode, lines, arcs, cylinders, spheres]
   );
 
+  const rotateEntity = useCallback(
+    (
+      type: 'vertex' | 'line' | 'arc' | 'cylinder' | 'sphere' | 'face' | 'group',
+      idOrData: any,
+      pivot: Point3D,
+      eulerRad: Point3D
+    ) => {
+      if (eulerRad.x === 0 && eulerRad.y === 0 && eulerRad.z === 0) return;
+
+      const cosX = Math.cos(eulerRad.x), sinX = Math.sin(eulerRad.x);
+      const cosY = Math.cos(eulerRad.y), sinY = Math.sin(eulerRad.y);
+      const cosZ = Math.cos(eulerRad.z), sinZ = Math.sin(eulerRad.z);
+
+      const rotatePt = (p: Point3D): Point3D => {
+        const x = p.x - pivot.x;
+        const y = p.y - pivot.y;
+        const z = (p.z || 0) - (pivot.z || 0);
+
+        // Rotate Z
+        const x1 = x * cosZ - y * sinZ;
+        const y1 = x * sinZ + y * cosZ;
+        const z1 = z;
+
+        // Rotate Y
+        const x2 = x1 * cosY + z1 * sinY;
+        const y2 = y1;
+        const z2 = -x1 * sinY + z1 * cosY;
+
+        // Rotate X
+        const x3 = x2;
+        const y3 = y2 * cosX - z2 * sinX;
+        const z3 = y2 * sinX + z2 * cosX;
+
+        return {
+          x: Math.round(x3 + pivot.x),
+          y: Math.round(y3 + pivot.y),
+          z: Math.round(z3 + (pivot.z || 0)),
+        };
+      };
+
+      const targetGroupId =
+        type === 'group'
+          ? (idOrData as string)
+          : groupMode && typeof idOrData === 'string'
+          ? (lines.find((l) => l.id === idOrData)?.groupId ||
+             arcs.find((a) => a.id === idOrData)?.groupId ||
+             cylinders.find((c) => c.id === idOrData)?.groupId ||
+             spheres.find((s) => s.id === idOrData)?.groupId)
+          : groupMode && type === 'face' && idOrData
+          ? ((idOrData as Face3D).groupId || groups.find((g) => g.type === 'plane' && g.memberIds.includes((idOrData as Face3D).id))?.id)
+          : null;
+
+      if (targetGroupId) {
+        setLinesState((prev) =>
+          prev.map((l) =>
+            l.groupId === targetGroupId
+              ? { ...l, start: rotatePt(l.start), end: rotatePt(l.end) }
+              : l
+          )
+        );
+        setArcsState((prev) =>
+          prev.map((a) =>
+            a.groupId === targetGroupId
+              ? {
+                  ...a,
+                  center: rotatePt(a.center),
+                  startPoint: a.startPoint ? rotatePt(a.startPoint) : undefined,
+                  endPoint: a.endPoint ? rotatePt(a.endPoint) : undefined,
+                }
+              : a
+          )
+        );
+        setCylindersState((prev) =>
+          prev.map((c) =>
+            c.groupId === targetGroupId
+              ? { ...c, center: rotatePt(c.center) }
+              : c
+          )
+        );
+        setSpheresState((prev) =>
+          prev.map((s) =>
+            s.groupId === targetGroupId
+              ? { ...s, center: rotatePt(s.center) }
+              : s
+          )
+        );
+        return;
+      }
+
+      if (type === 'line') {
+        const lineId = idOrData as string;
+        setLinesState((prev) =>
+          prev.map((l) => (l.id === lineId ? { ...l, start: rotatePt(l.start), end: rotatePt(l.end) } : l))
+        );
+      } else if (type === 'arc') {
+        const arcId = idOrData as string;
+        setArcsState((prev) =>
+          prev.map((a) =>
+            a.id === arcId
+              ? {
+                  ...a,
+                  center: rotatePt(a.center),
+                  startPoint: a.startPoint ? rotatePt(a.startPoint) : undefined,
+                  endPoint: a.endPoint ? rotatePt(a.endPoint) : undefined,
+                }
+              : a
+          )
+        );
+      } else if (type === 'cylinder') {
+        const cylId = idOrData as string;
+        setCylindersState((prev) =>
+          prev.map((c) => (c.id === cylId ? { ...c, center: rotatePt(c.center) } : c))
+        );
+      } else if (type === 'sphere') {
+        const sphId = idOrData as string;
+        setSpheresState((prev) =>
+          prev.map((s) => (s.id === sphId ? { ...s, center: rotatePt(s.center) } : s))
+        );
+      }
+    },
+    [groupMode, lines, arcs, cylinders, spheres, groups]
+  );
+
+  const scaleEntity = useCallback(
+    (
+      type: 'vertex' | 'line' | 'arc' | 'cylinder' | 'sphere' | 'face' | 'group',
+      idOrData: any,
+      pivot: Point3D,
+      scaleFactor: Point3D
+    ) => {
+      if (scaleFactor.x === 1 && scaleFactor.y === 1 && scaleFactor.z === 1) return;
+
+      const scalePt = (p: Point3D): Point3D => ({
+        x: Math.round(pivot.x + (p.x - pivot.x) * scaleFactor.x),
+        y: Math.round(pivot.y + (p.y - pivot.y) * scaleFactor.y),
+        z: Math.round((pivot.z || 0) + ((p.z || 0) - (pivot.z || 0)) * scaleFactor.z),
+      });
+      const avgScale = (Math.abs(scaleFactor.x) + Math.abs(scaleFactor.y) + Math.abs(scaleFactor.z)) / 3;
+
+      const targetGroupId =
+        type === 'group'
+          ? (idOrData as string)
+          : groupMode && typeof idOrData === 'string'
+          ? (lines.find((l) => l.id === idOrData)?.groupId ||
+             arcs.find((a) => a.id === idOrData)?.groupId ||
+             cylinders.find((c) => c.id === idOrData)?.groupId ||
+             spheres.find((s) => s.id === idOrData)?.groupId)
+          : groupMode && type === 'face' && idOrData
+          ? ((idOrData as Face3D).groupId || groups.find((g) => g.type === 'plane' && g.memberIds.includes((idOrData as Face3D).id))?.id)
+          : null;
+
+      if (targetGroupId) {
+        setLinesState((prev) =>
+          prev.map((l) =>
+            l.groupId === targetGroupId
+              ? { ...l, start: scalePt(l.start), end: scalePt(l.end) }
+              : l
+          )
+        );
+        setArcsState((prev) =>
+          prev.map((a) =>
+            a.groupId === targetGroupId
+              ? {
+                  ...a,
+                  center: scalePt(a.center),
+                  radius: Math.max(1, Math.round(a.radius * avgScale)),
+                  startPoint: a.startPoint ? scalePt(a.startPoint) : undefined,
+                  endPoint: a.endPoint ? scalePt(a.endPoint) : undefined,
+                }
+              : a
+          )
+        );
+        setCylindersState((prev) =>
+          prev.map((c) =>
+            c.groupId === targetGroupId
+              ? {
+                  ...c,
+                  center: scalePt(c.center),
+                  radius: Math.max(1, Math.round(c.radius * avgScale)),
+                  height: Math.max(1, Math.round(c.height * scaleFactor.z)),
+                }
+              : c
+          )
+        );
+        setSpheresState((prev) =>
+          prev.map((s) =>
+            s.groupId === targetGroupId
+              ? {
+                  ...s,
+                  center: scalePt(s.center),
+                  radius: Math.max(1, Math.round(s.radius * avgScale)),
+                }
+              : s
+          )
+        );
+        return;
+      }
+
+      if (type === 'line') {
+        const lineId = idOrData as string;
+        setLinesState((prev) =>
+          prev.map((l) => (l.id === lineId ? { ...l, start: scalePt(l.start), end: scalePt(l.end) } : l))
+        );
+      } else if (type === 'arc') {
+        const arcId = idOrData as string;
+        setArcsState((prev) =>
+          prev.map((a) =>
+            a.id === arcId
+              ? {
+                  ...a,
+                  center: scalePt(a.center),
+                  radius: Math.max(1, Math.round(a.radius * avgScale)),
+                  startPoint: a.startPoint ? scalePt(a.startPoint) : undefined,
+                  endPoint: a.endPoint ? scalePt(a.endPoint) : undefined,
+                }
+              : a
+          )
+        );
+      } else if (type === 'cylinder') {
+        const cylId = idOrData as string;
+        setCylindersState((prev) =>
+          prev.map((c) =>
+            c.id === cylId
+              ? {
+                  ...c,
+                  center: scalePt(c.center),
+                  radius: Math.max(1, Math.round(c.radius * avgScale)),
+                  height: Math.max(1, Math.round(c.height * scaleFactor.z)),
+                }
+              : c
+          )
+        );
+      } else if (type === 'sphere') {
+        const sphId = idOrData as string;
+        setSpheresState((prev) =>
+          prev.map((s) =>
+            s.id === sphId
+              ? {
+                  ...s,
+                  center: scalePt(s.center),
+                  radius: Math.max(1, Math.round(s.radius * avgScale)),
+                }
+              : s
+          )
+        );
+      }
+    },
+    [groupMode, lines, arcs, cylinders, spheres, groups]
+  );
+
   const commitTransform = useCallback(() => {
     pushToHistory(lines, arcs, cylinders, spheres, groups);
   }, [lines, arcs, cylinders, spheres, groups, pushToHistory]);
@@ -730,7 +989,11 @@ export function useDrawingState() {
     setGroupMode,
     createGroup,
     ungroup,
+    gizmoMode,
+    setGizmoMode,
     translateEntity,
+    rotateEntity,
+    scaleEntity,
     commitTransform,
     showOrthoPanel,
     setShowOrthoPanel,

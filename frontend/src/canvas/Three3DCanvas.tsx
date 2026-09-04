@@ -53,6 +53,9 @@ import {
   Eraser,
   Hand,
   ZoomIn,
+  Move,
+  RotateCw,
+  Scaling,
 } from 'lucide-react';
 
 interface Three3DCanvasProps {
@@ -105,6 +108,20 @@ interface Three3DCanvasProps {
     idOrData: any,
     delta: Point3D
   ) => void;
+  onRotateEntity?: (
+    type: 'vertex' | 'line' | 'arc' | 'cylinder' | 'sphere' | 'face' | 'group',
+    idOrData: any,
+    pivot: Point3D,
+    eulerRad: Point3D
+  ) => void;
+  onScaleEntity?: (
+    type: 'vertex' | 'line' | 'arc' | 'cylinder' | 'sphere' | 'face' | 'group',
+    idOrData: any,
+    pivot: Point3D,
+    scaleFactor: Point3D
+  ) => void;
+  gizmoMode?: 'translate' | 'rotate' | 'scale';
+  onSetGizmoMode?: (mode: 'translate' | 'rotate' | 'scale') => void;
   onCommitTransform?: () => void;
   groupMode?: boolean;
   groups?: EntityGroup[];
@@ -184,6 +201,10 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   onSetTheme,
   onOpenSettings,
   onTranslateEntity,
+  onRotateEntity,
+  onScaleEntity,
+  gizmoMode = 'translate',
+  onSetGizmoMode,
   onCommitTransform,
   groupMode = true,
   groups = [],
@@ -198,11 +219,11 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   const controlsRef = useRef<OrbitControls | null>(null);
   const gizmoCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // 3D Transform Gizmo Pivot Mesh & Controls
-  const pivotMeshRef = useRef<THREE.Mesh>(
-    new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ visible: false }))
-  );
+  // 3D Transform Gizmo Container & Controls (CAD/Blender Grade)
+  const transformGroupRef = useRef<THREE.Group>(new THREE.Group());
+  const pivotMeshRef = transformGroupRef as unknown as React.MutableRefObject<THREE.Mesh>;
   const transformControlsRef = useRef<TransformControls | null>(null);
+  const axisGuideLineRef = useRef<THREE.Line | null>(null);
 
   // Selection & Callback Refs for 1:1 zero-lag gizmo interaction
   const selectedVertexRef = useRef(selectedVertex);
@@ -218,10 +239,90 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   const selectedFaceRef = useRef(selectedFace);
   selectedFaceRef.current = selectedFace;
 
+  const linesRef = useRef(lines);
+  linesRef.current = lines;
+  const arcsRef = useRef(arcs);
+  arcsRef.current = arcs;
+  const cylindersRef = useRef(cylinders);
+  cylindersRef.current = cylinders;
+  const spheresRef = useRef(spheres);
+  spheresRef.current = spheres;
+  const groupModeRef = useRef(groupMode);
+  groupModeRef.current = groupMode;
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+
   const onTranslateEntityRef = useRef(onTranslateEntity);
   onTranslateEntityRef.current = onTranslateEntity;
+  const onRotateEntityRef = useRef(onRotateEntity);
+  onRotateEntityRef.current = onRotateEntity;
+  const onScaleEntityRef = useRef(onScaleEntity);
+  onScaleEntityRef.current = onScaleEntity;
   const onCommitTransformRef = useRef(onCommitTransform);
   onCommitTransformRef.current = onCommitTransform;
+
+  // Live Drag state
+  const isDraggingRef = useRef(false);
+  const dragStartPivotPos = useRef(new THREE.Vector3());
+  const dragStartPivotRot = useRef(new THREE.Euler());
+  const dragStartPivotScale = useRef(new THREE.Vector3(1, 1, 1));
+  const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Blender Modal Transform state: 'translate' (G), 'rotate' (R), 'scale' (S)
+  const [modalTransform, setModalTransform] = useState<{
+    active: boolean;
+    mode: 'translate' | 'rotate' | 'scale';
+    axisLock: 'X' | 'Y' | 'Z' | null;
+  }>({
+    active: false,
+    mode: 'translate',
+    axisLock: null,
+  });
+
+  const modalStartRef = useRef<{
+    mousePos: { x: number; y: number };
+    startPivotPos: THREE.Vector3;
+    startPivotRot: THREE.Euler;
+    startPivotScale: THREE.Vector3;
+    axisLock: 'X' | 'Y' | 'Z' | null;
+  }>({
+    mousePos: { x: 0, y: 0 },
+    startPivotPos: new THREE.Vector3(),
+    startPivotRot: new THREE.Euler(),
+    startPivotScale: new THREE.Vector3(1, 1, 1),
+    axisLock: null,
+  });
+  const modalTransformRef = useRef(modalTransform);
+  modalTransformRef.current = modalTransform;
+
+  const hasSelectionRef = useRef(false);
+  hasSelectionRef.current = !!(
+    selectedLineId ||
+    selectedArcId ||
+    selectedCylinderId ||
+    selectedSphereId ||
+    selectedVertex ||
+    selectedFace
+  );
+
+  // Live Transform HUD overlay state
+  const [liveTransformHud, setLiveTransformHud] = useState<{
+    visible: boolean;
+    mode: 'translate' | 'rotate' | 'scale';
+    dx: number;
+    dy: number;
+    dz: number;
+    angle?: number;
+    scale?: number;
+  }>({
+    visible: false,
+    mode: 'translate',
+    dx: 0,
+    dy: 0,
+    dz: 0,
+    angle: 0,
+    scale: 1,
+  });
 
   // Dynamic 3D Scene Groups
   const geometryGroupRef = useRef<THREE.Group>(new THREE.Group());
@@ -597,36 +698,167 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       requestRender();
     });
 
-    // 3D Transform Gizmo (Blender style X, Y, Z translation)
+    // Blender Infinite Axis Guideline
+    const guideGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-1000, 0, 0),
+      new THREE.Vector3(1000, 0, 0),
+    ]);
+    const guideMat = new THREE.LineDashedMaterial({
+      color: 0xef4444,
+      dashSize: 1,
+      gapSize: 0.5,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const guideLine = new THREE.Line(guideGeo, guideMat);
+    guideLine.computeLineDistances();
+    guideLine.visible = false;
+    scene.add(guideLine);
+    axisGuideLineRef.current = guideLine;
+
+    // 3D Transform Gizmo (Blender style Translate / Rotate / Scale)
     scene.add(pivotMeshRef.current);
     const transformControls = new TransformControls(orthoCam, renderer.domElement);
-    transformControls.setMode('translate');
+    transformControls.setMode(gizmoMode);
     transformControls.setSpace('world');
-    transformControls.size = 0.85;
+    transformControls.size = 1.25;
     transformControls.translationSnap = 1;
+    transformControls.rotationSnap = THREE.MathUtils.degToRad(15);
+    transformControls.scaleSnap = 0.25;
+
+    // Enhance gizmo pickers with generous hitboxes for CAD/Blender precision (zero missed clicks!)
+    const tcGizmo = (transformControls as any)._gizmo;
+    if (tcGizmo && tcGizmo.picker) {
+      const matPick = new THREE.MeshBasicMaterial({ visible: false, wireframe: true });
+
+      // Translate pickers: Add full-length shaft cylinders and large center sphere
+      if (tcGizmo.picker.translate) {
+        const xShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.8, 8), matPick);
+        xShaft.position.set(0.9, 0, 0);
+        xShaft.rotation.set(0, 0, -Math.PI / 2);
+        xShaft.name = 'X';
+        tcGizmo.picker.translate.add(xShaft);
+
+        const yShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.8, 8), matPick);
+        yShaft.position.set(0, 0.9, 0);
+        yShaft.name = 'Y';
+        tcGizmo.picker.translate.add(yShaft);
+
+        const zShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.8, 8), matPick);
+        zShaft.position.set(0, 0, 0.9);
+        zShaft.rotation.set(Math.PI / 2, 0, 0);
+        zShaft.name = 'Z';
+        tcGizmo.picker.translate.add(zShaft);
+
+        const centerPick = new THREE.Mesh(new THREE.SphereGeometry(0.45, 12, 12), matPick);
+        centerPick.name = 'XYZ';
+        tcGizmo.picker.translate.add(centerPick);
+      }
+
+      // Rotate pickers: Add generous toruses for rotation rings
+      if (tcGizmo.picker.rotate) {
+        const rotPickX = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.28, 6, 24), matPick);
+        rotPickX.rotation.set(0, -Math.PI / 2, -Math.PI / 2);
+        rotPickX.name = 'X';
+        tcGizmo.picker.rotate.add(rotPickX);
+
+        const rotPickY = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.28, 6, 24), matPick);
+        rotPickY.rotation.set(Math.PI / 2, 0, 0);
+        rotPickY.name = 'Y';
+        tcGizmo.picker.rotate.add(rotPickY);
+
+        const rotPickZ = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.28, 6, 24), matPick);
+        rotPickZ.name = 'Z';
+        tcGizmo.picker.rotate.add(rotPickZ);
+      }
+
+      // Scale pickers: Add full-length shaft cylinders
+      if (tcGizmo.picker.scale) {
+        const sxShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.8, 8), matPick);
+        sxShaft.position.set(0.9, 0, 0);
+        sxShaft.rotation.set(0, 0, -Math.PI / 2);
+        sxShaft.name = 'X';
+        tcGizmo.picker.scale.add(sxShaft);
+
+        const syShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.8, 8), matPick);
+        syShaft.position.set(0, 0.9, 0);
+        syShaft.name = 'Y';
+        tcGizmo.picker.scale.add(syShaft);
+
+        const szShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.8, 8), matPick);
+        szShaft.position.set(0, 0, 0.9);
+        szShaft.rotation.set(Math.PI / 2, 0, 0);
+        szShaft.name = 'Z';
+        tcGizmo.picker.scale.add(szShaft);
+
+        const sCenter = new THREE.Mesh(new THREE.SphereGeometry(0.45, 12, 12), matPick);
+        sCenter.name = 'XYZ';
+        tcGizmo.picker.scale.add(sCenter);
+      }
+    }
 
     transformControls.addEventListener('dragging-changed', (event: any) => {
+      const isDragging = !!event.value;
+      isDraggingRef.current = isDragging;
+
       if (controlsRef.current) {
-        controlsRef.current.enabled = !event.value;
+        controlsRef.current.enabled = !isDragging;
       }
-      if (!event.value) {
-        onCommitTransformRef.current?.();
-      }
-    });
 
-    const dragStartPos = new THREE.Vector3();
-    transformControls.addEventListener('mouseDown', () => {
-      dragStartPos.copy(pivotMeshRef.current.position);
-    });
+      if (isDragging) {
+        dragStartPivotPos.current.copy(pivotMeshRef.current.position);
+        dragStartPivotRot.current.copy(pivotMeshRef.current.rotation);
+        dragStartPivotScale.current.copy(pivotMeshRef.current.scale);
 
-    transformControls.addEventListener('objectChange', () => {
-      const curPos = pivotMeshRef.current.position;
-      const dx = Math.round(curPos.x - dragStartPos.x);
-      const dz = Math.round(curPos.y - dragStartPos.y); // Height
-      const dy = Math.round(curPos.z - dragStartPos.z); // Depth
+        // Update infinite axis guideline
+        const axis = (transformControls as any).axis as string | null;
+        if (axisGuideLineRef.current && axis) {
+          const p = pivotMeshRef.current.position;
+          const guide = axisGuideLineRef.current;
+          const mat = guide.material as THREE.LineDashedMaterial;
+          if (axis.includes('X')) {
+            guide.position.set(0, p.y, p.z);
+            guide.rotation.set(0, 0, 0);
+            mat.color.setHex(0xef4444); // Red
+            guide.visible = true;
+          } else if (axis.includes('Y')) {
+            // Three.js Y = logical Z (height)
+            guide.position.set(p.x, 0, p.z);
+            guide.rotation.set(0, 0, Math.PI / 2);
+            mat.color.setHex(0x3b82f6); // Blue
+            guide.visible = true;
+          } else if (axis.includes('Z')) {
+            // Three.js Z = logical Y (depth)
+            guide.position.set(p.x, p.y, 0);
+            guide.rotation.set(0, Math.PI / 2, 0);
+            mat.color.setHex(0x10b981); // Green
+            guide.visible = true;
+          } else {
+            guide.visible = false;
+          }
+        }
 
-      if (dx !== 0 || dy !== 0 || dz !== 0) {
-        const delta: Point3D = { x: dx, y: dy, z: dz };
+        setLiveTransformHud({
+          visible: true,
+          mode: transformControls.getMode() as any,
+          dx: 0,
+          dy: 0,
+          dz: 0,
+          angle: 0,
+          scale: 1,
+        });
+      } else {
+        // Drag Ended / Released -> Commit the final transform!
+        if (axisGuideLineRef.current) axisGuideLineRef.current.visible = false;
+        setLiveTransformHud((prev) => ({ ...prev, visible: false }));
+
+        const mode = transformControls.getMode();
+        const curPos = pivotMeshRef.current.position;
+        const dx = Math.round(curPos.x - dragStartPivotPos.current.x);
+        const dz = Math.round(curPos.y - dragStartPivotPos.current.y); // Height
+        const dy = Math.round(curPos.z - dragStartPivotPos.current.z); // Depth
+
         const selV = selectedVertexRef.current;
         const selL = selectedLineIdRef.current;
         const selA = selectedArcIdRef.current;
@@ -634,32 +866,138 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         const selS = selectedSphereIdRef.current;
         const selF = selectedFaceRef.current;
 
-        if (selV) {
-          onTranslateEntityRef.current?.('vertex', selV, delta);
-        } else if (selL) {
-          onTranslateEntityRef.current?.('line', selL, delta);
-        } else if (selA) {
-          onTranslateEntityRef.current?.('arc', selA, delta);
-        } else if (selC) {
-          onTranslateEntityRef.current?.('cylinder', selC, delta);
-        } else if (selS) {
-          onTranslateEntityRef.current?.('sphere', selS, delta);
-        } else if (selF) {
-          onTranslateEntityRef.current?.('face', selF, delta);
+        const currentGroupId =
+          (selL && linesRef.current.find((l) => l.id === selL)?.groupId) ||
+          (selA && arcsRef.current.find((a) => a.id === selA)?.groupId) ||
+          (selC && cylindersRef.current.find((c) => c.id === selC)?.groupId) ||
+          (selS && spheresRef.current.find((s) => s.id === selS)?.groupId) ||
+          (selF && (selF.groupId || groupsRef.current.find((g) => g.type === 'plane' && g.memberIds.includes(selF.id))?.id));
+
+        if (mode === 'translate') {
+          if (dx !== 0 || dy !== 0 || dz !== 0) {
+            const delta: Point3D = { x: dx, y: dy, z: dz };
+            if (currentGroupId && groupModeRef.current) {
+              onTranslateEntityRef.current?.('group', currentGroupId, delta);
+            } else if (selV) {
+              onTranslateEntityRef.current?.('vertex', selV, delta);
+            } else if (selL) {
+              onTranslateEntityRef.current?.('line', selL, delta);
+            } else if (selA) {
+              onTranslateEntityRef.current?.('arc', selA, delta);
+            } else if (selC) {
+              onTranslateEntityRef.current?.('cylinder', selC, delta);
+            } else if (selS) {
+              onTranslateEntityRef.current?.('sphere', selS, delta);
+            } else if (selF) {
+              onTranslateEntityRef.current?.('face', selF, delta);
+            }
+            onCommitTransformRef.current?.();
+          }
+        } else if (mode === 'rotate') {
+          const dRotX = pivotMeshRef.current.rotation.x - dragStartPivotRot.current.x;
+          const dRotY = pivotMeshRef.current.rotation.y - dragStartPivotRot.current.y;
+          const dRotZ = pivotMeshRef.current.rotation.z - dragStartPivotRot.current.z;
+          if (Math.abs(dRotX) > 0.01 || Math.abs(dRotY) > 0.01 || Math.abs(dRotZ) > 0.01) {
+            const pivotLogical = threeToLogical(dragStartPivotPos.current);
+            const eulerRad: Point3D = { x: dRotX, y: dRotZ, z: dRotY };
+            const targetType = currentGroupId && groupModeRef.current ? 'group' : selL ? 'line' : selA ? 'arc' : selC ? 'cylinder' : selS ? 'sphere' : 'face';
+            const targetId = currentGroupId && groupModeRef.current ? currentGroupId : (selL || selA || selC || selS || selF);
+            onRotateEntityRef.current?.(targetType as any, targetId, pivotLogical, eulerRad);
+            onCommitTransformRef.current?.();
+          }
+          pivotMeshRef.current.rotation.set(0, 0, 0);
+        } else if (mode === 'scale') {
+          const sx = pivotMeshRef.current.scale.x / (dragStartPivotScale.current.x || 1);
+          const sy = pivotMeshRef.current.scale.z / (dragStartPivotScale.current.z || 1);
+          const sz = pivotMeshRef.current.scale.y / (dragStartPivotScale.current.y || 1);
+          if (Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02 || Math.abs(sz - 1) > 0.02) {
+            const pivotLogical = threeToLogical(dragStartPivotPos.current);
+            const scaleFactor: Point3D = { x: sx, y: sy, z: sz };
+            const targetType = currentGroupId && groupModeRef.current ? 'group' : selL ? 'line' : selA ? 'arc' : selC ? 'cylinder' : selS ? 'sphere' : 'face';
+            const targetId = currentGroupId && groupModeRef.current ? currentGroupId : (selL || selA || selC || selS || selF);
+            onScaleEntityRef.current?.(targetType as any, targetId, pivotLogical, scaleFactor);
+            onCommitTransformRef.current?.();
+          }
+          pivotMeshRef.current.scale.set(1, 1, 1);
         }
 
-        dragStartPos.set(
-          dragStartPos.x + dx,
-          dragStartPos.y + dz,
-          dragStartPos.z + dy
-        );
         requestRender();
       }
+    });
+
+    transformControls.addEventListener('objectChange', () => {
+      const mode = transformControls.getMode();
+      if (mode === 'translate') {
+        const curPos = pivotMeshRef.current.position;
+        const dx = Math.round(curPos.x - dragStartPivotPos.current.x);
+        const dz = Math.round(curPos.y - dragStartPivotPos.current.y); // Height
+        const dy = Math.round(curPos.z - dragStartPivotPos.current.z); // Depth
+
+        setLiveTransformHud((prev) => ({
+          ...prev,
+          visible: true,
+          mode: 'translate',
+          dx,
+          dy,
+          dz,
+        }));
+      } else if (mode === 'rotate') {
+        const dRotY = pivotMeshRef.current.rotation.y - dragStartPivotRot.current.y;
+        const deg = Math.round((dRotY * 180) / Math.PI);
+        setLiveTransformHud((prev) => ({
+          ...prev,
+          visible: true,
+          mode: 'rotate',
+          angle: deg,
+        }));
+      } else if (mode === 'scale') {
+        const s = pivotMeshRef.current.scale.x;
+        setLiveTransformHud((prev) => ({
+          ...prev,
+          visible: true,
+          mode: 'scale',
+          scale: s,
+        }));
+      }
+      requestRender();
     });
 
     const gizmoRoot = (transformControls as any).getHelper ? (transformControls as any).getHelper() : transformControls;
     scene.add(gizmoRoot);
     transformControlsRef.current = transformControls;
+
+    (window as any).__debugGizmo = {
+      getTC: () => transformControlsRef.current,
+      getPivot: () => pivotMeshRef.current,
+      getInfo: () => {
+        const tc = transformControlsRef.current;
+        const cam = activeCameraRef.current;
+        const renderer = rendererRef.current;
+        if (!tc || !cam || !renderer) return { error: 'not ready' };
+        const rect = renderer.domElement.getBoundingClientRect();
+        const p = pivotMeshRef.current.position.clone().project(cam);
+        const screenCenter = {
+          x: Math.round(((p.x + 1) * rect.width) / 2 + rect.left),
+          y: Math.round(((-p.y + 1) * rect.height) / 2 + rect.top),
+        };
+        // Arrow points
+        const pX = pivotMeshRef.current.position.clone().add(new THREE.Vector3(3.5, 0, 0)).project(cam);
+        const pY = pivotMeshRef.current.position.clone().add(new THREE.Vector3(0, 3.5, 0)).project(cam);
+        const pZ = pivotMeshRef.current.position.clone().add(new THREE.Vector3(0, 0, 3.5)).project(cam);
+        return {
+          mode: tc.getMode(),
+          attached: !!tc.object,
+          objectPosition: tc.object?.position,
+          axis: (tc as any).axis,
+          dragging: (tc as any).dragging,
+          rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+          screenCenter,
+          screenArrowX: { x: Math.round(((pX.x + 1) * rect.width) / 2 + rect.left), y: Math.round(((-pX.y + 1) * rect.height) / 2 + rect.top) },
+          screenArrowY: { x: Math.round(((pY.x + 1) * rect.width) / 2 + rect.left), y: Math.round(((-pY.y + 1) * rect.height) / 2 + rect.top) },
+          screenArrowZ: { x: Math.round(((pZ.x + 1) * rect.width) / 2 + rect.left), y: Math.round(((-pZ.y + 1) * rect.height) / 2 + rect.top) },
+        };
+      },
+    };
 
     requestRender();
 
@@ -696,6 +1034,165 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     };
   }, [requestRender]);
 
+  // Synchronize Gizmo Mode (Translate / Rotate / Scale)
+  useEffect(() => {
+    if (transformControlsRef.current) {
+      transformControlsRef.current.setMode(gizmoMode);
+      requestRender();
+    }
+  }, [gizmoMode, requestRender]);
+
+  // Guideline helper for locked axes
+  const updateAxisGuide = useCallback((axis: 'X' | 'Y' | 'Z' | null, p: THREE.Vector3) => {
+    if (!axisGuideLineRef.current) return;
+    const guide = axisGuideLineRef.current;
+    const mat = guide.material as THREE.LineDashedMaterial;
+    if (!axis) {
+      guide.visible = false;
+      return;
+    }
+    if (axis === 'X') {
+      guide.position.set(0, p.y, p.z);
+      guide.rotation.set(0, 0, 0);
+      mat.color.setHex(0xef4444); // Red
+      guide.visible = true;
+    } else if (axis === 'Y') {
+      // Logical Y (depth) = Three.js Z
+      guide.position.set(p.x, p.y, 0);
+      guide.rotation.set(0, Math.PI / 2, 0);
+      mat.color.setHex(0x10b981); // Green
+      guide.visible = true;
+    } else if (axis === 'Z') {
+      // Logical Z (height) = Three.js Y
+      guide.position.set(p.x, 0, p.z);
+      guide.rotation.set(0, 0, Math.PI / 2);
+      mat.color.setHex(0x3b82f6); // Blue
+      guide.visible = true;
+    }
+  }, []);
+
+  // Blender Modal Transform Callbacks
+  const startModalTransform = useCallback(
+    (mode: 'translate' | 'rotate' | 'scale') => {
+      const hasSel = hasSelectionRef.current;
+      if (!hasSel) return;
+
+      modalStartRef.current = {
+        mousePos: { ...lastMousePosRef.current },
+        startPivotPos: transformGroupRef.current.position.clone(),
+        startPivotRot: transformGroupRef.current.rotation.clone(),
+        startPivotScale: transformGroupRef.current.scale.clone(),
+        axisLock: null,
+      };
+
+      setModalTransform({
+        active: true,
+        mode,
+        axisLock: null,
+      });
+
+      setLiveTransformHud({
+        visible: true,
+        mode,
+        dx: 0,
+        dy: 0,
+        dz: 0,
+        angle: 0,
+        scale: 1,
+      });
+      requestRender();
+    },
+    [requestRender]
+  );
+
+  const commitModalTransform = useCallback(() => {
+    if (!modalTransformRef.current.active) return;
+    const mode = modalTransformRef.current.mode;
+    const curPos = transformGroupRef.current.position;
+    const startPos = modalStartRef.current.startPivotPos;
+    const dx = Math.round(curPos.x - startPos.x);
+    const dz = Math.round(curPos.y - startPos.y); // Height in logical
+    const dy = Math.round(curPos.z - startPos.z); // Depth in logical
+
+    const selV = selectedVertexRef.current;
+    const selL = selectedLineIdRef.current;
+    const selA = selectedArcIdRef.current;
+    const selC = selectedCylinderIdRef.current;
+    const selS = selectedSphereIdRef.current;
+    const selF = selectedFaceRef.current;
+
+    const currentGroupId =
+      (selL && linesRef.current.find((l) => l.id === selL)?.groupId) ||
+      (selA && arcsRef.current.find((a) => a.id === selA)?.groupId) ||
+      (selC && cylindersRef.current.find((c) => c.id === selC)?.groupId) ||
+      (selS && spheresRef.current.find((s) => s.id === selS)?.groupId) ||
+      (selF && (selF.groupId || groupsRef.current.find((g) => g.type === 'plane' && g.memberIds.includes(selF.id))?.id));
+
+    if (mode === 'translate') {
+      if (dx !== 0 || dy !== 0 || dz !== 0) {
+        const delta: Point3D = { x: dx, y: dy, z: dz };
+        if (currentGroupId && groupModeRef.current) {
+          onTranslateEntityRef.current?.('group', currentGroupId, delta);
+        } else if (selV) {
+          onTranslateEntityRef.current?.('vertex', selV, delta);
+        } else if (selL) {
+          onTranslateEntityRef.current?.('line', selL, delta);
+        } else if (selA) {
+          onTranslateEntityRef.current?.('arc', selA, delta);
+        } else if (selC) {
+          onTranslateEntityRef.current?.('cylinder', selC, delta);
+        } else if (selS) {
+          onTranslateEntityRef.current?.('sphere', selS, delta);
+        } else if (selF) {
+          onTranslateEntityRef.current?.('face', selF, delta);
+        }
+        onCommitTransformRef.current?.();
+      }
+    } else if (mode === 'rotate') {
+      const dRotX = transformGroupRef.current.rotation.x - modalStartRef.current.startPivotRot.x;
+      const dRotY = transformGroupRef.current.rotation.y - modalStartRef.current.startPivotRot.y;
+      const dRotZ = transformGroupRef.current.rotation.z - modalStartRef.current.startPivotRot.z;
+      if (Math.abs(dRotX) > 0.01 || Math.abs(dRotY) > 0.01 || Math.abs(dRotZ) > 0.01) {
+        const pivotLogical = threeToLogical(modalStartRef.current.startPivotPos);
+        const eulerRad: Point3D = { x: dRotX, y: dRotZ, z: dRotY };
+        const targetType = currentGroupId && groupModeRef.current ? 'group' : selL ? 'line' : selA ? 'arc' : selC ? 'cylinder' : selS ? 'sphere' : 'face';
+        const targetId = currentGroupId && groupModeRef.current ? currentGroupId : (selL || selA || selC || selS || selF);
+        onRotateEntityRef.current?.(targetType as any, targetId, pivotLogical, eulerRad);
+        onCommitTransformRef.current?.();
+      }
+      transformGroupRef.current.rotation.set(0, 0, 0);
+    } else if (mode === 'scale') {
+      const sx = transformGroupRef.current.scale.x / (modalStartRef.current.startPivotScale.x || 1);
+      const sy = transformGroupRef.current.scale.z / (modalStartRef.current.startPivotScale.z || 1);
+      const sz = transformGroupRef.current.scale.y / (modalStartRef.current.startPivotScale.y || 1);
+      if (Math.abs(sx - 1) > 0.02 || Math.abs(sy - 1) > 0.02 || Math.abs(sz - 1) > 0.02) {
+        const pivotLogical = threeToLogical(modalStartRef.current.startPivotPos);
+        const scaleFactor: Point3D = { x: sx, y: sy, z: sz };
+        const targetType = currentGroupId && groupModeRef.current ? 'group' : selL ? 'line' : selA ? 'arc' : selC ? 'cylinder' : selS ? 'sphere' : 'face';
+        const targetId = currentGroupId && groupModeRef.current ? currentGroupId : (selL || selA || selC || selS || selF);
+        onScaleEntityRef.current?.(targetType as any, targetId, pivotLogical, scaleFactor);
+        onCommitTransformRef.current?.();
+      }
+      transformGroupRef.current.scale.set(1, 1, 1);
+    }
+
+    updateAxisGuide(null, curPos);
+    setLiveTransformHud((prev) => ({ ...prev, visible: false }));
+    setModalTransform({ active: false, mode: 'translate', axisLock: null });
+    requestRender();
+  }, [requestRender, updateAxisGuide]);
+
+  const cancelModalTransform = useCallback(() => {
+    if (!modalTransformRef.current.active) return;
+    transformGroupRef.current.position.copy(modalStartRef.current.startPivotPos);
+    transformGroupRef.current.rotation.copy(modalStartRef.current.startPivotRot);
+    transformGroupRef.current.scale.copy(modalStartRef.current.startPivotScale);
+    updateAxisGuide(null, modalStartRef.current.startPivotPos);
+    setLiveTransformHud((prev) => ({ ...prev, visible: false }));
+    setModalTransform({ active: false, mode: 'translate', axisLock: null });
+    requestRender();
+  }, [requestRender, updateAxisGuide]);
+
   // -------------------------------------------------------------
   // 2. Keyboard Modifiers (Shift Pan, Shift+Tab Magnet, Numpad Views)
   // -------------------------------------------------------------
@@ -704,6 +1201,74 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       const target = e.target as HTMLElement;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
         return;
+      }
+
+      // Blender Modal Transform Keys
+      if (modalTransformRef.current.active) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commitModalTransform();
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelModalTransform();
+          return;
+        }
+        if (e.key === 'x' || e.key === 'X') {
+          e.preventDefault();
+          setModalTransform((p) => {
+            const nextLock = p.axisLock === 'X' ? null : 'X';
+            modalStartRef.current.axisLock = nextLock;
+            updateAxisGuide(nextLock, transformGroupRef.current.position);
+            requestRender();
+            return { ...p, axisLock: nextLock };
+          });
+          return;
+        }
+        if (e.key === 'y' || e.key === 'Y') {
+          e.preventDefault();
+          setModalTransform((p) => {
+            const nextLock = p.axisLock === 'Y' ? null : 'Y';
+            modalStartRef.current.axisLock = nextLock;
+            updateAxisGuide(nextLock, transformGroupRef.current.position);
+            requestRender();
+            return { ...p, axisLock: nextLock };
+          });
+          return;
+        }
+        if (e.key === 'z' || e.key === 'Z') {
+          e.preventDefault();
+          setModalTransform((p) => {
+            const nextLock = p.axisLock === 'Z' ? null : 'Z';
+            modalStartRef.current.axisLock = nextLock;
+            updateAxisGuide(nextLock, transformGroupRef.current.position);
+            requestRender();
+            return { ...p, axisLock: nextLock };
+          });
+          return;
+        }
+      } else {
+        if (hasSelectionRef.current && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+          if (e.key === 'g' || e.key === 'G') {
+            e.preventDefault();
+            onSetGizmoMode?.('translate');
+            startModalTransform('translate');
+            return;
+          }
+          if (e.key === 'r' || e.key === 'R') {
+            e.preventDefault();
+            onSetGizmoMode?.('rotate');
+            startModalTransform('rotate');
+            return;
+          }
+          if (e.key === 's' || e.key === 'S') {
+            e.preventDefault();
+            onSetGizmoMode?.('scale');
+            startModalTransform('scale');
+            return;
+          }
+        }
       }
 
       // Shift key held -> switch Right Drag to PAN
@@ -740,6 +1305,21 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         e.preventDefault();
         frameAll();
       } else if (e.key === 'Escape') {
+        if (modalTransformRef.current.active) {
+          cancelModalTransform();
+          return;
+        }
+        if (isDraggingRef.current) {
+          isDraggingRef.current = false;
+          pivotMeshRef.current.position.copy(dragStartPivotPos.current);
+          pivotMeshRef.current.rotation.copy(dragStartPivotRot.current);
+          pivotMeshRef.current.scale.copy(dragStartPivotScale.current);
+          if (axisGuideLineRef.current) axisGuideLineRef.current.visible = false;
+          setLiveTransformHud((prev) => ({ ...prev, visible: false }));
+          if (controlsRef.current) controlsRef.current.enabled = true;
+          requestRender();
+          return;
+        }
         cylinderDraftRef.current = { step: 0, center: null, radius: 5, normal: { x: 0, y: 0, z: 1 } };
         onSetAnchor(null);
         onSelectLine(null);
@@ -1014,14 +1594,22 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   }, [gridSettings.showGrid, activeIsoplane, activeElevation, theme, requestRender]);
 
   // -------------------------------------------------------------
-  // 5. Render Base 3D Geometry (Lines, Arcs, Solid Faces, Vertex Handles)
-  // Isolated from hover/drag!
+  // 5. Render Base & Transformable 3D Geometry (CAD & Blender Grade)
+  // All selected objects are placed inside transformGroupRef so they transform live at 60 FPS!
   // -------------------------------------------------------------
   useEffect(() => {
     const geoGroup = geometryGroupRef.current;
     const faceGroup = facesGroupRef.current;
+    const selGroup = selectionHighlightGroupRef.current;
+    const transformGroup = transformGroupRef.current;
+
+    // Do NOT rebuild or interrupt geometry during an active user drag!
+    if (isDraggingRef.current) return;
+
     geoGroup.clear();
     faceGroup.clear();
+    selGroup.clear();
+    transformGroup.clear();
 
     const isDark = theme === 'dark';
     const baseLineMat = new THREE.LineBasicMaterial({
@@ -1040,50 +1628,6 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       depthTest: !isVertexMode,
     });
 
-    lines.forEach((line) => {
-      const v1 = logicalToThree(line.start);
-      const v2 = logicalToThree(line.end);
-
-      const lineGeo = new THREE.BufferGeometry().setFromPoints([v1, v2]);
-      const lineMesh = new THREE.Line(lineGeo, baseLineMat);
-      geoGroup.add(lineMesh);
-
-      const m1 = new THREE.Mesh(sphereGeo, sphereMat);
-      m1.position.copy(v1);
-      geoGroup.add(m1);
-
-      const m2 = new THREE.Mesh(sphereGeo, sphereMat);
-      m2.position.copy(v2);
-      geoGroup.add(m2);
-    });
-
-    arcs.forEach((arc) => {
-      const curvePoints = getArc3DPoints(arc, 48);
-      const curveGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
-      const curveMat = new THREE.LineBasicMaterial({ color: isDark ? 0xf1f5f9 : 0x111827, linewidth: 2 });
-      geoGroup.add(new THREE.Line(curveGeo, curveMat));
-
-      if (arc.startPoint && arc.endPoint) {
-        const ep1 = logicalToThree(arc.startPoint);
-        const ep2 = logicalToThree(arc.endPoint);
-        const epGeo = new THREE.SphereGeometry(0.14, 8, 8);
-        const epMat = new THREE.MeshBasicMaterial({ color: isDark ? 0x818cf8 : 0x4f46e5 });
-        const m1 = new THREE.Mesh(epGeo, epMat);
-        m1.position.copy(ep1);
-        const m2 = new THREE.Mesh(epGeo, epMat);
-        m2.position.copy(ep2);
-        geoGroup.add(m1);
-        geoGroup.add(m2);
-      } else {
-        const centerThree = logicalToThree(arc.center);
-        const centerGeo = new THREE.SphereGeometry(0.14, 8, 8);
-        const centerMat = new THREE.MeshBasicMaterial({ color: isDark ? 0x818cf8 : 0x6366f1 });
-        const cMesh = new THREE.Mesh(centerGeo, centerMat);
-        cMesh.position.copy(centerThree);
-        geoGroup.add(cMesh);
-      }
-    });
-
     const baseFaceMat = new THREE.MeshLambertMaterial({
       color: isDark
         ? (solidShading ? 0x27272a : 0x18181b)
@@ -1096,7 +1640,219 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       polygonOffsetUnits: 1,
     });
 
+    const haloLineMat = new THREE.LineBasicMaterial({
+      color: 0x4f46e5,
+      linewidth: 3.5,
+      depthTest: false,
+    });
+
+    const haloGlowMat = new THREE.LineBasicMaterial({
+      color: 0x818cf8,
+      transparent: true,
+      opacity: 0.65,
+      linewidth: 7,
+      depthTest: false,
+    });
+
+    // 1. Determine active selection & group membership
+    const currentGroupId =
+      (selectedLineId && lines.find((l) => l.id === selectedLineId)?.groupId) ||
+      (selectedArcId && arcs.find((a) => a.id === selectedArcId)?.groupId) ||
+      (selectedCylinderId && cylinders.find((c) => c.id === selectedCylinderId)?.groupId) ||
+      (selectedSphereId && spheres.find((s) => s.id === selectedSphereId)?.groupId) ||
+      (selectedFace && (selectedFace.groupId || groups.find((g) => g.type === 'plane' && g.memberIds.includes(selectedFace.id))?.id));
+
+    const isLineSel = (l: DrawingLine) => (currentGroupId && groupMode ? l.groupId === currentGroupId : l.id === selectedLineId);
+    const isArcSel = (a: DrawingArc) => (currentGroupId && groupMode ? a.groupId === currentGroupId : a.id === selectedArcId);
+    const isCylSel = (c: DrawingCylinder) => (currentGroupId && groupMode ? c.groupId === currentGroupId : c.id === selectedCylinderId);
+    const isSphSel = (s: DrawingSphere) => (currentGroupId && groupMode ? s.groupId === currentGroupId : s.id === selectedSphereId);
+    const isFaceSel = (f: Face3D) => (currentGroupId && groupMode ? f.groupId === currentGroupId : selectedFace && f.id === selectedFace.id);
+
+    const hasSelection = !!(
+      selectedLineId ||
+      selectedArcId ||
+      selectedCylinderId ||
+      selectedSphereId ||
+      selectedVertex ||
+      selectedFace
+    );
+
+    // 2. Compute Selection Centroid / Pivot Point
+    const pivot = new THREE.Vector3();
+    let hasPivot = false;
+
+    if (hasSelection) {
+      if (currentGroupId && groupMode) {
+        const box = new THREE.Box3();
+        lines.filter((l) => l.groupId === currentGroupId).forEach((l) => {
+          box.expandByPoint(logicalToThree(l.start));
+          box.expandByPoint(logicalToThree(l.end));
+        });
+        arcs.filter((a) => a.groupId === currentGroupId).forEach((a) => {
+          const c = logicalToThree(a.center);
+          box.expandByPoint(new THREE.Vector3(c.x + a.radius, c.y, c.z + a.radius));
+          box.expandByPoint(new THREE.Vector3(c.x - a.radius, c.y, c.z - a.radius));
+        });
+        cylinders.filter((c) => c.groupId === currentGroupId).forEach((c) => {
+          const center = logicalToThree(c.center);
+          box.expandByPoint(new THREE.Vector3(center.x + c.radius, center.y + c.height, center.z + c.radius));
+          box.expandByPoint(new THREE.Vector3(center.x - c.radius, center.y, center.z - c.radius));
+        });
+        spheres.filter((s) => s.groupId === currentGroupId).forEach((s) => {
+          const center = logicalToThree(s.center);
+          box.expandByPoint(new THREE.Vector3(center.x + s.radius, center.y + s.radius, center.z + s.radius));
+          box.expandByPoint(new THREE.Vector3(center.x - s.radius, center.y, center.z - s.radius));
+        });
+        if (!box.isEmpty()) {
+          box.getCenter(pivot);
+          hasPivot = true;
+        }
+      } else if (selectedVertex) {
+        pivot.copy(logicalToThree(selectedVertex));
+        hasPivot = true;
+      } else if (selectedLineId) {
+        const l = lines.find((line) => line.id === selectedLineId);
+        if (l) {
+          pivot.copy(logicalToThree({
+            x: (l.start.x + l.end.x) / 2,
+            y: (l.start.y + l.end.y) / 2,
+            z: ((l.start.z || 0) + (l.end.z || 0)) / 2,
+          }));
+          hasPivot = true;
+        }
+      } else if (selectedArcId) {
+        const a = arcs.find((arc) => arc.id === selectedArcId);
+        if (a) {
+          pivot.copy(logicalToThree(a.center));
+          hasPivot = true;
+        }
+      } else if (selectedCylinderId) {
+        const c = cylinders.find((cyl) => cyl.id === selectedCylinderId);
+        if (c) {
+          pivot.copy(logicalToThree(c.center));
+          hasPivot = true;
+        }
+      } else if (selectedSphereId) {
+        const s = spheres.find((sph) => sph.id === selectedSphereId);
+        if (s) {
+          pivot.copy(logicalToThree(s.center));
+          hasPivot = true;
+        }
+      } else if (selectedFace) {
+        pivot.copy(logicalToThree(selectedFace.center));
+        hasPivot = true;
+      }
+    }
+
+    // Configure transform group & attach TransformControls
+    if (hasPivot && !activeAnchor) {
+      transformGroup.position.copy(pivot);
+      transformGroup.rotation.set(0, 0, 0);
+      transformGroup.scale.set(1, 1, 1);
+      if (transformControlsRef.current) {
+        transformControlsRef.current.attach(transformGroup);
+      }
+    } else {
+      if (transformControlsRef.current) {
+        transformControlsRef.current.detach();
+      }
+    }
+
+    // Helper to offset points relative to pivot for objects inside transformGroup
+    const rel = (pt: THREE.Vector3) => (hasPivot ? pt.clone().sub(pivot) : pt);
+
+    // 3. Render Lines
+    lines.forEach((line) => {
+      const isSelected = isLineSel(line);
+      const v1 = logicalToThree(line.start);
+      const v2 = logicalToThree(line.end);
+
+      if (isSelected && hasPivot) {
+        const r1 = rel(v1);
+        const r2 = rel(v2);
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([r1, r2]);
+        transformGroup.add(new THREE.Line(lineGeo, baseLineMat));
+        transformGroup.add(new THREE.Line(lineGeo, haloLineMat));
+        transformGroup.add(new THREE.Line(lineGeo, haloGlowMat));
+
+        const m1 = new THREE.Mesh(sphereGeo, sphereMat);
+        m1.position.copy(r1);
+        transformGroup.add(m1);
+        const m2 = new THREE.Mesh(sphereGeo, sphereMat);
+        m2.position.copy(r2);
+        transformGroup.add(m2);
+      } else {
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([v1, v2]);
+        geoGroup.add(new THREE.Line(lineGeo, baseLineMat));
+
+        const m1 = new THREE.Mesh(sphereGeo, sphereMat);
+        m1.position.copy(v1);
+        geoGroup.add(m1);
+        const m2 = new THREE.Mesh(sphereGeo, sphereMat);
+        m2.position.copy(v2);
+        geoGroup.add(m2);
+      }
+    });
+
+    // 4. Render Arcs
+    arcs.forEach((arc) => {
+      const isSelected = isArcSel(arc);
+      const curvePoints = getArc3DPoints(arc, 48);
+
+      if (isSelected && hasPivot) {
+        const relCurve = curvePoints.map(rel);
+        const curveGeo = new THREE.BufferGeometry().setFromPoints(relCurve);
+        transformGroup.add(new THREE.Line(curveGeo, baseLineMat));
+        transformGroup.add(new THREE.Line(curveGeo, haloLineMat));
+
+        if (arc.startPoint && arc.endPoint) {
+          const ep1 = rel(logicalToThree(arc.startPoint));
+          const ep2 = rel(logicalToThree(arc.endPoint));
+          const epGeo = new THREE.SphereGeometry(0.14, 8, 8);
+          const epMat = new THREE.MeshBasicMaterial({ color: isDark ? 0x818cf8 : 0x4f46e5 });
+          const m1 = new THREE.Mesh(epGeo, epMat);
+          m1.position.copy(ep1);
+          const m2 = new THREE.Mesh(epGeo, epMat);
+          m2.position.copy(ep2);
+          transformGroup.add(m1);
+          transformGroup.add(m2);
+        } else {
+          const cThree = rel(logicalToThree(arc.center));
+          const cGeo = new THREE.SphereGeometry(0.14, 8, 8);
+          const cMat = new THREE.MeshBasicMaterial({ color: isDark ? 0x818cf8 : 0x6366f1 });
+          const cm = new THREE.Mesh(cGeo, cMat);
+          cm.position.copy(cThree);
+          transformGroup.add(cm);
+        }
+      } else {
+        const curveGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
+        geoGroup.add(new THREE.Line(curveGeo, baseLineMat));
+
+        if (arc.startPoint && arc.endPoint) {
+          const ep1 = logicalToThree(arc.startPoint);
+          const ep2 = logicalToThree(arc.endPoint);
+          const epGeo = new THREE.SphereGeometry(0.14, 8, 8);
+          const epMat = new THREE.MeshBasicMaterial({ color: isDark ? 0x818cf8 : 0x4f46e5 });
+          const m1 = new THREE.Mesh(epGeo, epMat);
+          m1.position.copy(ep1);
+          const m2 = new THREE.Mesh(epGeo, epMat);
+          m2.position.copy(ep2);
+          geoGroup.add(m1);
+          geoGroup.add(m2);
+        } else {
+          const cThree = logicalToThree(arc.center);
+          const cGeo = new THREE.SphereGeometry(0.14, 8, 8);
+          const cMat = new THREE.MeshBasicMaterial({ color: isDark ? 0x818cf8 : 0x6366f1 });
+          const cm = new THREE.Mesh(cGeo, cMat);
+          cm.position.copy(cThree);
+          geoGroup.add(cm);
+        }
+      }
+    });
+
+    // 5. Render Cylinders
     cylinders.forEach((cyl) => {
+      const isSelected = isCylSel(cyl);
       const centerThree = logicalToThree(cyl.center);
       const normalThree = cyl.normal ? logicalToThreeNormal(cyl.normal) : new THREE.Vector3(0, 1, 0);
       const { basePoints, topPoints, silhouetteLines, midPoint, quaternion } = getCylinderGeometryData(
@@ -1106,101 +1862,100 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         normalThree
       );
 
-      // Base circle
-      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(basePoints), baseLineMat));
-      // Top circle
-      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(topPoints), baseLineMat));
-      // 4 Silhouette lines
+      const targetGroup = isSelected && hasPivot ? transformGroup : geoGroup;
+      const targetFaceGroup = isSelected && hasPivot ? transformGroup : faceGroup;
+
+      const rBase = isSelected && hasPivot ? basePoints.map(rel) : basePoints;
+      const rTop = isSelected && hasPivot ? topPoints.map(rel) : topPoints;
+      targetGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rBase), baseLineMat));
+      targetGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rTop), baseLineMat));
       silhouetteLines.forEach(([p1, p2]) => {
-        geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([p1, p2]), baseLineMat));
+        const rp1 = isSelected && hasPivot ? rel(p1) : p1;
+        const rp2 = isSelected && hasPivot ? rel(p2) : p2;
+        targetGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([rp1, rp2]), baseLineMat));
       });
 
-      // Solid cylinder shading
       if (solidShading) {
         const cylGeo = new THREE.CylinderGeometry(cyl.radius, cyl.radius, Math.abs(cyl.height), 32, 1, false);
         const cylMesh = new THREE.Mesh(cylGeo, baseFaceMat);
-        cylMesh.position.copy(midPoint);
+        cylMesh.position.copy(isSelected && hasPivot ? rel(midPoint) : midPoint);
         cylMesh.quaternion.copy(quaternion);
         (cylMesh as any).userData = { cylinderData: cyl };
-        faceGroup.add(cylMesh);
+        targetFaceGroup.add(cylMesh);
+      }
+
+      if (isSelected && hasPivot) {
+        targetGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rBase), haloLineMat));
+        targetGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rTop), haloLineMat));
       }
     });
 
-    // 3D Solid Spheres with shaded faces & technical contour rings
+    // 6. Render Solid Spheres & Technical Rings
     spheres.forEach((sph) => {
+      const isSelected = isSphSel(sph);
       const centerThree = logicalToThree(sph.center);
+      const targetGroup = isSelected && hasPivot ? transformGroup : geoGroup;
+      const targetFaceGroup = isSelected && hasPivot ? transformGroup : faceGroup;
+      const cPos = isSelected && hasPivot ? rel(centerThree) : centerThree;
 
-      // Solid shaded sphere surface
       if (solidShading) {
         const sphGeo = new THREE.SphereGeometry(sph.radius, 28, 20);
         const sphMesh = new THREE.Mesh(sphGeo, baseFaceMat);
-        sphMesh.position.copy(centerThree);
+        sphMesh.position.copy(cPos);
         (sphMesh as any).userData = { sphereData: sph };
-        faceGroup.add(sphMesh);
+        targetFaceGroup.add(sphMesh);
       }
 
-      // 3 Technical Drawing Orthogonal Wireframe Rings
       const ringSegs = 48;
-      // Ring 1: Equator (XZ plane in Three.js -> XY in logical)
       const r1Pts: THREE.Vector3[] = [];
-      for (let i = 0; i <= ringSegs; i++) {
-        const theta = (i / ringSegs) * Math.PI * 2;
-        r1Pts.push(
-          new THREE.Vector3(
-            centerThree.x + sph.radius * Math.cos(theta),
-            centerThree.y,
-            centerThree.z + sph.radius * Math.sin(theta)
-          )
-        );
-      }
-      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(r1Pts), baseLineMat));
-
-      // Ring 2: Vertical Ring (XY plane in Three.js -> XZ in logical)
       const r2Pts: THREE.Vector3[] = [];
-      for (let i = 0; i <= ringSegs; i++) {
-        const theta = (i / ringSegs) * Math.PI * 2;
-        r2Pts.push(
-          new THREE.Vector3(
-            centerThree.x + sph.radius * Math.cos(theta),
-            centerThree.y + sph.radius * Math.sin(theta),
-            centerThree.z
-          )
-        );
-      }
-      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(r2Pts), baseLineMat));
-
-      // Ring 3: Vertical Ring (YZ plane in Three.js -> YZ in logical)
       const r3Pts: THREE.Vector3[] = [];
       for (let i = 0; i <= ringSegs; i++) {
         const theta = (i / ringSegs) * Math.PI * 2;
-        r3Pts.push(
-          new THREE.Vector3(
-            centerThree.x,
-            centerThree.y + sph.radius * Math.sin(theta),
-            centerThree.z + sph.radius * Math.cos(theta)
-          )
-        );
+        r1Pts.push(new THREE.Vector3(cPos.x + sph.radius * Math.cos(theta), cPos.y, cPos.z + sph.radius * Math.sin(theta)));
+        r2Pts.push(new THREE.Vector3(cPos.x + sph.radius * Math.cos(theta), cPos.y + sph.radius * Math.sin(theta), cPos.z));
+        r3Pts.push(new THREE.Vector3(cPos.x, cPos.y + sph.radius * Math.sin(theta), cPos.z + sph.radius * Math.cos(theta)));
       }
-      geoGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(r3Pts), baseLineMat));
+      targetGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(r1Pts), baseLineMat));
+      targetGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(r2Pts), baseLineMat));
+      targetGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(r3Pts), baseLineMat));
+
+      if (isSelected && hasPivot) {
+        const haloGeo = new THREE.SphereGeometry(sph.radius * 1.02, 24, 16);
+        const haloMat = new THREE.MeshBasicMaterial({
+          color: 0x4f46e5,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.8,
+          depthTest: false,
+        });
+        const halo = new THREE.Mesh(haloGeo, haloMat);
+        halo.position.copy(cPos);
+        targetGroup.add(halo);
+      }
     });
 
+    // 7. Render Planar Faces
     const extracted = extractFacesFromLines(lines, arcs);
     extractedFacesRef.current = extracted;
 
     extracted.forEach((faceObj) => {
+      const isSelected = isFaceSel(faceObj);
       const v = faceObj.vertices.map(logicalToThree);
       if (v.length < 3) return;
 
+      const targetFaceGroup = isSelected && hasPivot ? transformGroup : faceGroup;
+      const pts = isSelected && hasPivot ? v.map(rel) : v;
+
       const faceGeo = new THREE.BufferGeometry();
-      if (v.length === 3) {
+      if (pts.length === 3) {
         const vertices = new Float32Array([
-          v[0].x, v[0].y, v[0].z,
-          v[1].x, v[1].y, v[1].z,
-          v[2].x, v[2].y, v[2].z,
+          pts[0].x, pts[0].y, pts[0].z,
+          pts[1].x, pts[1].y, pts[1].z,
+          pts[2].x, pts[2].y, pts[2].z,
         ]);
         faceGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
       } else {
-        // Robust 2D projection and triangulation for arbitrary N-gons
         const normThree = faceObj.normal ? logicalToThreeNormal(faceObj.normal) : new THREE.Vector3(0, 1, 0);
         const u = new THREE.Vector3();
         if (Math.abs(normThree.y) < 0.9) {
@@ -1210,16 +1965,14 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         }
         const w = new THREE.Vector3().crossVectors(normThree, u).normalize();
 
-        const pts2D: THREE.Vector2[] = v.map((pt) => new THREE.Vector2(pt.dot(u), pt.dot(w)));
+        const pts2D = pts.map((pt) => new THREE.Vector2(pt.dot(u), pt.dot(w)));
         const triangles = THREE.ShapeUtils.triangulateShape(pts2D, []);
 
         const posArray: number[] = [];
         for (const tri of triangles) {
           for (const idx of tri) {
-            const pt = v[idx];
-            if (pt) {
-              posArray.push(pt.x, pt.y, pt.z);
-            }
+            const pt = pts[idx];
+            if (pt) posArray.push(pt.x, pt.y, pt.z);
           }
         }
         if (posArray.length > 0) {
@@ -1230,11 +1983,77 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
       const faceMesh = new THREE.Mesh(faceGeo, baseFaceMat);
       (faceMesh as any).userData = { faceData: faceObj };
-      faceGroup.add(faceMesh);
+      targetFaceGroup.add(faceMesh);
+
+      if (isSelected && hasPivot) {
+        const selMat = new THREE.MeshBasicMaterial({
+          color: 0x6366f1,
+          transparent: true,
+          opacity: 0.38,
+          side: THREE.DoubleSide,
+          depthTest: false,
+        });
+        targetFaceGroup.add(new THREE.Mesh(faceGeo, selMat));
+      }
     });
 
+    // 8. 3D Bounding Cage for Groups (Inside transformGroup so it transforms live!)
+    if (currentGroupId && groupMode && hasPivot) {
+      const box = new THREE.Box3();
+      lines.filter((l) => l.groupId === currentGroupId).forEach((l) => {
+        box.expandByPoint(rel(logicalToThree(l.start)));
+        box.expandByPoint(rel(logicalToThree(l.end)));
+      });
+      arcs.filter((a) => a.groupId === currentGroupId).forEach((a) => {
+        const c = rel(logicalToThree(a.center));
+        box.expandByPoint(new THREE.Vector3(c.x + a.radius, c.y, c.z + a.radius));
+        box.expandByPoint(new THREE.Vector3(c.x - a.radius, c.y, c.z - a.radius));
+      });
+      cylinders.filter((c) => c.groupId === currentGroupId).forEach((c) => {
+        const center = rel(logicalToThree(c.center));
+        box.expandByPoint(new THREE.Vector3(center.x + c.radius, center.y + c.height, center.z + c.radius));
+        box.expandByPoint(new THREE.Vector3(center.x - c.radius, center.y, center.z - c.radius));
+      });
+      spheres.filter((s) => s.groupId === currentGroupId).forEach((s) => {
+        const center = rel(logicalToThree(s.center));
+        box.expandByPoint(new THREE.Vector3(center.x + s.radius, center.y + s.radius, center.z + s.radius));
+        box.expandByPoint(new THREE.Vector3(center.x - s.radius, center.y, center.z - s.radius));
+      });
+      if (!box.isEmpty()) {
+        const boxHelper = new THREE.Box3Helper(box, new THREE.Color(0x6366f1));
+        transformGroup.add(boxHelper);
+      }
+    }
+
+    // 9. Selected Vertex Indicator
+    if (selectedVertex && hasPivot && isVertexMode) {
+      const selGeo = new THREE.SphereGeometry(0.28, 14, 14);
+      const selMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b, depthTest: false });
+      const m = new THREE.Mesh(selGeo, selMat);
+      m.position.set(0, 0, 0); // At pivot center inside transformGroup
+      transformGroup.add(m);
+    }
+
     requestRender();
-  }, [lines, arcs, cylinders, spheres, selectionMode, solidShading, theme, requestRender]);
+  }, [
+    lines,
+    arcs,
+    cylinders,
+    spheres,
+    selectedLineId,
+    selectedArcId,
+    selectedCylinderId,
+    selectedSphereId,
+    selectedVertex,
+    selectedFace,
+    selectionMode,
+    groupMode,
+    groups,
+    solidShading,
+    theme,
+    activeAnchor,
+    requestRender,
+  ]);
 
   // Update scene background on theme change
   useEffect(() => {
@@ -1245,209 +2064,14 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
     }
   }, [theme, requestRender]);
 
-  // -------------------------------------------------------------
-  // 6. Selection Highlights Layer
-  // -------------------------------------------------------------
-  useEffect(() => {
-    const selGroup = selectionHighlightGroupRef.current;
-    selGroup.clear();
-
-    if (selectedLineId) {
-      const line = lines.find((l) => l.id === selectedLineId);
-      if (line) {
-        const v1 = logicalToThree(line.start);
-        const v2 = logicalToThree(line.end);
-        const lineGeo = new THREE.BufferGeometry().setFromPoints([v1, v2]);
-
-        const lineMat = new THREE.LineBasicMaterial({
-          color: 0x4f46e5,
-          linewidth: 3.5,
-          depthTest: false,
-        });
-        selGroup.add(new THREE.Line(lineGeo, lineMat));
-
-        const haloMat = new THREE.LineBasicMaterial({
-          color: 0x818cf8,
-          transparent: true,
-          opacity: 0.65,
-          linewidth: 7,
-          depthTest: false,
-        });
-        selGroup.add(new THREE.Line(lineGeo, haloMat));
-      }
-    }
-
-    if (selectedArcId) {
-      const arc = arcs.find((a) => a.id === selectedArcId);
-      if (arc) {
-        const pts = getArc3DPoints(arc, 48);
-        const geo = new THREE.BufferGeometry().setFromPoints(pts);
-        const mat = new THREE.LineBasicMaterial({ color: 0x4f46e5, linewidth: 3.5, depthTest: false });
-        selGroup.add(new THREE.Line(geo, mat));
-
-        const haloMat = new THREE.LineBasicMaterial({ color: 0x818cf8, transparent: true, opacity: 0.65, linewidth: 7, depthTest: false });
-        selGroup.add(new THREE.Line(geo, haloMat));
-      }
-    }
-
-    if (selectedCylinderId) {
-      const cyl = cylinders.find((c) => c.id === selectedCylinderId);
-      if (cyl) {
-        const centerThree = logicalToThree(cyl.center);
-        const normalThree = cyl.normal ? logicalToThreeNormal(cyl.normal) : new THREE.Vector3(0, 1, 0);
-        const { basePoints, topPoints, silhouetteLines } = getCylinderGeometryData(
-          centerThree,
-          cyl.radius,
-          cyl.height,
-          normalThree
-        );
-        const mat = new THREE.LineBasicMaterial({ color: 0x4f46e5, linewidth: 3.5, depthTest: false });
-        selGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(basePoints), mat));
-        selGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(topPoints), mat));
-        silhouetteLines.forEach(([p1, p2]) => {
-          selGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([p1, p2]), mat));
-        });
-      }
-    }
-
-    if (selectedSphereId) {
-      const sph = spheres.find((s) => s.id === selectedSphereId);
-      if (sph) {
-        const centerThree = logicalToThree(sph.center);
-        const haloGeo = new THREE.SphereGeometry(sph.radius * 1.02, 24, 16);
-        const haloMat = new THREE.MeshBasicMaterial({
-          color: 0x4f46e5,
-          wireframe: true,
-          transparent: true,
-          opacity: 0.8,
-          depthTest: false,
-        });
-        const halo = new THREE.Mesh(haloGeo, haloMat);
-        halo.position.copy(centerThree);
-        selGroup.add(halo);
-      }
-    }
-
-    if (selectedVertex) {
-      const v = logicalToThree(selectedVertex);
-      const selGeo = new THREE.SphereGeometry(0.28, 14, 14);
-      const selMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b, depthTest: false });
-      const m = new THREE.Mesh(selGeo, selMat);
-      m.position.copy(v);
-      selGroup.add(m);
-    }
-
-    if (selectedFace) {
-      const v = selectedFace.vertices.map(logicalToThree);
-      const faceGeo = new THREE.BufferGeometry();
-      if (v.length === 3) {
-        const vertices = new Float32Array([
-          v[0].x, v[0].y, v[0].z,
-          v[1].x, v[1].y, v[1].z,
-          v[2].x, v[2].y, v[2].z,
-        ]);
-        faceGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-      } else if (v.length >= 4) {
-        const vertices = new Float32Array([
-          v[0].x, v[0].y, v[0].z,
-          v[1].x, v[1].y, v[1].z,
-          v[2].x, v[2].y, v[2].z,
-
-          v[0].x, v[0].y, v[0].z,
-          v[2].x, v[2].y, v[2].z,
-          v[3].x, v[3].y, v[3].z,
-        ]);
-        faceGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-      }
-      faceGeo.computeVertexNormals();
-
-      const faceMat = new THREE.MeshBasicMaterial({
-        color: 0x6366f1,
-        transparent: true,
-        opacity: 0.38,
-        side: THREE.DoubleSide,
-        depthTest: false,
-      });
-      selGroup.add(new THREE.Mesh(faceGeo, faceMat));
-    }
-
-    requestRender();
-  }, [selectedLineId, selectedArcId, selectedCylinderId, selectedSphereId, selectedVertex, selectedFace, lines, arcs, cylinders, spheres, requestRender]);
-
-  // -------------------------------------------------------------
-  // 7. Update TransformControls Pivot & Attachment (Blender Gizmo)
-  // -------------------------------------------------------------
+  // Sync Gizmo Mode (translate / rotate / scale)
   useEffect(() => {
     const tc = transformControlsRef.current;
-    const pivot = pivotMeshRef.current;
-    if (!tc || !pivot) return;
-
-    if (activeAnchor) {
-      tc.detach();
-      return;
+    if (tc) {
+      tc.setMode(gizmoMode);
+      requestRender();
     }
-
-    if (selectedVertex) {
-      pivot.position.copy(logicalToThree(selectedVertex));
-      tc.attach(pivot);
-    } else if (selectedLineId) {
-      const line = lines.find((l) => l.id === selectedLineId);
-      if (line) {
-        const midLogical: Point3D = {
-          x: Math.round((line.start.x + line.end.x) / 2),
-          y: Math.round((line.start.y + line.end.y) / 2),
-          z: Math.round(((line.start.z || 0) + (line.end.z || 0)) / 2),
-        };
-        pivot.position.copy(logicalToThree(midLogical));
-        tc.attach(pivot);
-      } else {
-        tc.detach();
-      }
-    } else if (selectedArcId) {
-      const arc = arcs.find((a) => a.id === selectedArcId);
-      if (arc) {
-        pivot.position.copy(logicalToThree(arc.center));
-        tc.attach(pivot);
-      } else {
-        tc.detach();
-      }
-    } else if (selectedCylinderId) {
-      const cyl = cylinders.find((c) => c.id === selectedCylinderId);
-      if (cyl) {
-        pivot.position.copy(logicalToThree(cyl.center));
-        tc.attach(pivot);
-      } else {
-        tc.detach();
-      }
-    } else if (selectedSphereId) {
-      const sph = spheres.find((s) => s.id === selectedSphereId);
-      if (sph) {
-        pivot.position.copy(logicalToThree(sph.center));
-        tc.attach(pivot);
-      } else {
-        tc.detach();
-      }
-    } else if (selectedFace) {
-      pivot.position.copy(logicalToThree(selectedFace.center));
-      tc.attach(pivot);
-    } else {
-      tc.detach();
-    }
-    requestRender();
-  }, [
-    selectedVertex,
-    selectedLineId,
-    selectedArcId,
-    selectedCylinderId,
-    selectedSphereId,
-    selectedFace,
-    activeAnchor,
-    lines,
-    arcs,
-    cylinders,
-    spheres,
-    requestRender,
-  ]);
+  }, [gizmoMode, requestRender]);
 
   // -------------------------------------------------------------
   // 7. Blender Snapping Calculations (Optimized: 0 Object Allocations!)
@@ -2246,6 +2870,65 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   // 9. Pointer Event Handlers (High Performance: Zero Drag Overhead!)
   // -------------------------------------------------------------
   const handlePointerMove = (e: React.PointerEvent) => {
+    lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+
+    // 1. Blender Modal Transform in progress (G, R, S)
+    if (modalTransform.active) {
+      const dxPixels = e.clientX - modalStartRef.current.mousePos.x;
+      const dyPixels = e.clientY - modalStartRef.current.mousePos.y;
+      const mode = modalTransform.mode;
+      const lock = modalTransform.axisLock;
+      const sensitivity = 0.08;
+
+      if (mode === 'translate') {
+        const p = modalStartRef.current.startPivotPos.clone();
+        if (lock === 'X') {
+          const dx = Math.round(dxPixels * sensitivity);
+          p.x += dx;
+          setLiveTransformHud({ visible: true, mode: 'translate', dx, dy: 0, dz: 0 });
+        } else if (lock === 'Y') {
+          // Three.js Z = logical Y (depth)
+          const dy = Math.round(-dyPixels * sensitivity);
+          p.z += dy;
+          setLiveTransformHud({ visible: true, mode: 'translate', dx: 0, dy, dz: 0 });
+        } else if (lock === 'Z') {
+          // Three.js Y = logical Z (height)
+          const dz = Math.round(-dyPixels * sensitivity);
+          p.y += dz;
+          setLiveTransformHud({ visible: true, mode: 'translate', dx: 0, dy: 0, dz });
+        } else {
+          const dx = Math.round(dxPixels * sensitivity);
+          const dz = Math.round(-dyPixels * sensitivity);
+          p.x += dx;
+          p.y += dz;
+          setLiveTransformHud({ visible: true, mode: 'translate', dx, dy: 0, dz });
+        }
+        transformGroupRef.current.position.copy(p);
+        updateAxisGuide(lock, p);
+      } else if (mode === 'rotate') {
+        const deg = Math.round(dxPixels * 0.8);
+        const rad = THREE.MathUtils.degToRad(deg);
+        const r = modalStartRef.current.startPivotRot.clone();
+        if (lock === 'X') r.x += rad;
+        else if (lock === 'Y') r.z += rad;
+        else if (lock === 'Z') r.y += rad;
+        else r.y += rad;
+        transformGroupRef.current.rotation.copy(r);
+        setLiveTransformHud({ visible: true, mode: 'rotate', dx: 0, dy: 0, dz: 0, angle: deg });
+      } else if (mode === 'scale') {
+        const factor = Math.max(0.1, Number((1 + dxPixels * 0.01).toFixed(2)));
+        const s = modalStartRef.current.startPivotScale.clone();
+        if (lock === 'X') s.x *= factor;
+        else if (lock === 'Y') s.z *= factor;
+        else if (lock === 'Z') s.y *= factor;
+        else s.multiplyScalar(factor);
+        transformGroupRef.current.scale.copy(s);
+        setLiveTransformHud({ visible: true, mode: 'scale', dx: 0, dy: 0, dz: 0, scale: factor });
+      }
+      requestRender();
+      return;
+    }
+
     // CRITICAL: When any button is pressed (right drag rotating or pan), bypass all snapping/raycasting!
     if (e.buttons !== 0) {
       if (tooltipRef.current) tooltipRef.current.style.display = 'none';
@@ -2399,6 +3082,61 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
 
   const handlePointerDown = (e: React.PointerEvent) => {
     pointerDownPosRef.current = { x: e.clientX, y: e.clientY, button: e.button };
+
+    // Modal Transform Click Handling: Left-Click confirms, Right-Click cancels
+    if (modalTransformRef.current.active) {
+      if (e.button === 0) {
+        commitModalTransform();
+      } else if (e.button === 2) {
+        cancelModalTransform();
+      }
+      return;
+    }
+
+    // Right-click while dragging cancels transform! (Blender behavior)
+    if (e.button === 2 && isDraggingRef.current) {
+      isDraggingRef.current = false;
+      pivotMeshRef.current.position.copy(dragStartPivotPos.current);
+      pivotMeshRef.current.rotation.copy(dragStartPivotRot.current);
+      pivotMeshRef.current.scale.copy(dragStartPivotScale.current);
+      if (axisGuideLineRef.current) axisGuideLineRef.current.visible = false;
+      setLiveTransformHud((prev) => ({ ...prev, visible: false }));
+      if (controlsRef.current) controlsRef.current.enabled = true;
+      requestRender();
+      return;
+    }
+
+    // If interacting with TransformControls gizmo handles, NEVER deselect or trigger drawing tools!
+    const tc = transformControlsRef.current;
+    if (tc && ((tc as any).axis !== null || isDraggingRef.current)) {
+      return;
+    }
+
+    // Proactive Raycast & Proximity against TransformControls gizmo pickers (prevents accidental deselect)
+    if (tc && tc.object && activeCameraRef.current && rendererRef.current) {
+      const rect = rendererRef.current.domElement.getBoundingClientRect();
+      const pointer = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1
+      );
+      _raycaster.setFromCamera(pointer, activeCameraRef.current);
+      const gizmo = (tc as any)._gizmo;
+      if (gizmo && gizmo.picker && gizmo.picker[tc.getMode()]) {
+        const hits = _raycaster.intersectObject(gizmo.picker[tc.getMode()], true);
+        if (hits.length > 0) {
+          (tc as any).axis = hits[0].object.name;
+          return;
+        }
+      }
+      // Check 2D screen distance to gizmo center (within 36px)
+      const p = tc.object.position.clone().project(activeCameraRef.current);
+      const screenX = ((p.x + 1) * rect.width) / 2 + rect.left;
+      const screenY = ((-p.y + 1) * rect.height) / 2 + rect.top;
+      if (Math.hypot(e.clientX - screenX, e.clientY - screenY) < 36) {
+        (tc as any).axis = tc.getMode() === 'rotate' ? 'E' : 'XYZ';
+        return;
+      }
+    }
 
     // Right-click and middle-click are reserved for rotation and pan!
     if (e.button !== 0) return;
@@ -2711,6 +3449,27 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
           });
         }
 
+        // Face click selection fallback: clicking on a face of a cube/mesh selects the cube/mesh!
+        if (!hitLineId && !hitArcId && !hitCylinderId && !hitSphereId) {
+          if (snap.type === 'face') {
+            if (snap.sphereData) {
+              hitSphereId = snap.sphereData.id;
+            } else if (snap.cylinderData) {
+              hitCylinderId = snap.cylinderData.id;
+            } else if (snap.faceData) {
+              const fv = snap.faceData.vertices;
+              for (const line of lines) {
+                const sMatch = fv.some((v) => v.x === line.start.x && v.y === line.start.y && (v.z || 0) === (line.start.z || 0));
+                const eMatch = fv.some((v) => v.x === line.end.x && v.y === line.end.y && (v.z || 0) === (line.end.z || 0));
+                if (sMatch && eMatch) {
+                  hitLineId = line.id;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
         if (activeTool === 'select') {
           onSelectLine(hitLineId);
           onSelectArc?.(hitArcId);
@@ -2940,6 +3699,88 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
             }}
           >
             <span>Face</span>
+          </button>
+        </div>
+
+        {/* Pill 1b: Transform Mode (Move G / Rotate R / Scale S) */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            backgroundColor: isDark ? '#27272a' : '#ffffff',
+            borderRadius: 6,
+            border: isDark ? '1px solid #3f3f46' : '1px solid #e5e7eb',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            padding: 3,
+            gap: 2,
+            height: 32,
+          }}
+        >
+          <button
+            onClick={() => onSetGizmoMode?.('translate')}
+            title="Move / Translate (Key: G)"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '0 8px',
+              height: 24,
+              borderRadius: 4,
+              border: 'none',
+              backgroundColor: gizmoMode === 'translate' ? (isDark ? '#f4f4f5' : '#18181b') : 'transparent',
+              color: gizmoMode === 'translate' ? (isDark ? '#18181b' : '#ffffff') : (isDark ? '#a1a1aa' : '#4b5563'),
+              fontSize: 11,
+              fontWeight: gizmoMode === 'translate' ? 600 : 500,
+              cursor: 'pointer',
+              transition: 'all 0.1s ease',
+            }}
+          >
+            <Move size={12} strokeWidth={2.2} />
+            <span>Move</span>
+          </button>
+          <button
+            onClick={() => onSetGizmoMode?.('rotate')}
+            title="Rotate (Key: R)"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '0 8px',
+              height: 24,
+              borderRadius: 4,
+              border: 'none',
+              backgroundColor: gizmoMode === 'rotate' ? (isDark ? '#f4f4f5' : '#18181b') : 'transparent',
+              color: gizmoMode === 'rotate' ? (isDark ? '#18181b' : '#ffffff') : (isDark ? '#a1a1aa' : '#4b5563'),
+              fontSize: 11,
+              fontWeight: gizmoMode === 'rotate' ? 600 : 500,
+              cursor: 'pointer',
+              transition: 'all 0.1s ease',
+            }}
+          >
+            <RotateCw size={12} strokeWidth={2.2} />
+            <span>Rotate</span>
+          </button>
+          <button
+            onClick={() => onSetGizmoMode?.('scale')}
+            title="Scale (Key: S)"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '0 8px',
+              height: 24,
+              borderRadius: 4,
+              border: 'none',
+              backgroundColor: gizmoMode === 'scale' ? (isDark ? '#f4f4f5' : '#18181b') : 'transparent',
+              color: gizmoMode === 'scale' ? (isDark ? '#18181b' : '#ffffff') : (isDark ? '#a1a1aa' : '#4b5563'),
+              fontSize: 11,
+              fontWeight: gizmoMode === 'scale' ? 600 : 500,
+              cursor: 'pointer',
+              transition: 'all 0.1s ease',
+            }}
+          >
+            <Scaling size={12} strokeWidth={2.2} />
+            <span>Scale</span>
           </button>
         </div>
 
@@ -3258,6 +4099,68 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
             <Sparkles size={12} />
             <span>Sketch on Face</span>
           </button>
+        </div>
+      )}
+
+      {/* Live Transform HUD (CAD/Blender Grade Readout) */}
+      {liveTransformHud.visible && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 54,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            backgroundColor: isDark ? 'rgba(24, 24, 27, 0.95)' : 'rgba(255, 255, 255, 0.95)',
+            border: isDark ? '1px solid #4f46e5' : '1px solid #6366f1',
+            borderRadius: 6,
+            padding: '6px 14px',
+            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+            zIndex: 40,
+            backdropFilter: 'blur(8px)',
+            color: isDark ? '#f4f4f5' : '#18181b',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: 'monospace',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span
+              style={{
+                textTransform: 'uppercase',
+                color: '#6366f1',
+                fontWeight: 800,
+                fontSize: 11,
+                letterSpacing: '0.05em',
+              }}
+            >
+              {liveTransformHud.mode}
+            </span>
+          </div>
+          {liveTransformHud.mode === 'translate' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ color: '#ef4444' }}>ΔX: {liveTransformHud.dx > 0 ? `+${liveTransformHud.dx}` : liveTransformHud.dx}</span>
+              <span style={{ color: '#10b981' }}>ΔY: {liveTransformHud.dy > 0 ? `+${liveTransformHud.dy}` : liveTransformHud.dy}</span>
+              <span style={{ color: '#3b82f6' }}>ΔZ: {liveTransformHud.dz > 0 ? `+${liveTransformHud.dz}` : liveTransformHud.dz}</span>
+            </div>
+          )}
+          {liveTransformHud.mode === 'rotate' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>Angle:</span>
+              <span style={{ color: '#6366f1' }}>{liveTransformHud.angle ?? 0}°</span>
+            </div>
+          )}
+          {liveTransformHud.mode === 'scale' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>Scale:</span>
+              <span style={{ color: '#6366f1' }}>{Number((liveTransformHud.scale ?? 1).toFixed(2))}x</span>
+            </div>
+          )}
+          <span style={{ fontSize: 10, color: isDark ? '#71717a' : '#9ca3af', fontWeight: 400 }}>
+            [Esc / Right-Click: Cancel]
+          </span>
         </div>
       )}
 
