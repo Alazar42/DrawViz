@@ -163,3 +163,113 @@ export function getLineDirection(
   // Incline
   return { angle: 0, directionLabel: 'Inclined / Ramp' };
 }
+
+export interface IsocircleEllipseParams {
+  centerWorld: ScreenPoint;
+  centerScreen: ScreenPoint;
+  radiusX: number; // semi-major radius in screen px
+  radiusY: number; // semi-minor radius in screen px
+  rotation: number; // radians
+  startAngleRad: number;
+  endAngleRad: number;
+}
+
+/**
+ * Calculates exact AutoCAD-standard isocircle ellipse parameters for canvas rendering
+ */
+export function getIsocircleEllipseParams(
+  center: Point3D,
+  radius: number,
+  plane: IsoplaneType,
+  unitSize: number = 28,
+  viewport: ViewportTransform = { panX: 0, panY: 0, zoom: 1 },
+  startAngleDeg: number = 0,
+  endAngleDeg: number = 360
+): IsocircleEllipseParams {
+  const centerWorld = gridToWorld(center.x, center.y, center.z || 0, unitSize);
+  const centerScreen = worldToScreen(centerWorld, viewport);
+
+  // Universal semi-major & semi-minor radii for isometric projection:
+  // r_major = sqrt(3/2) * R * unitSize
+  // r_minor = sqrt(1/2) * R * unitSize
+  const zoom = viewport.zoom;
+  const radiusX = Math.sqrt(1.5) * radius * unitSize * zoom;
+  const radiusY = Math.sqrt(0.5) * radius * unitSize * zoom;
+
+  let rotation = 0;
+  if (plane === 'front') {
+    rotation = -Math.PI / 3; // -60 degrees
+  } else if (plane === 'side') {
+    rotation = Math.PI / 3; // +60 degrees
+  }
+
+  const startAngleRad = (startAngleDeg * Math.PI) / 180;
+  const endAngleRad = (endAngleDeg * Math.PI) / 180;
+
+  return {
+    centerWorld,
+    centerScreen,
+    radiusX,
+    radiusY,
+    rotation,
+    startAngleRad,
+    endAngleRad,
+  };
+}
+
+/**
+ * Calculates screen distance from a point to an isocircle perimeter for selection and erasing
+ */
+export function distanceToIsocircle(
+  screenPt: ScreenPoint,
+  center: Point3D,
+  radius: number,
+  plane: IsoplaneType,
+  unitSize: number,
+  viewport: ViewportTransform,
+  startAngleDeg: number = 0,
+  endAngleDeg: number = 360
+): number {
+  const params = getIsocircleEllipseParams(
+    center,
+    radius,
+    plane,
+    unitSize,
+    viewport,
+    startAngleDeg,
+    endAngleDeg
+  );
+
+  const dx = screenPt.x - params.centerScreen.x;
+  const dy = screenPt.y - params.centerScreen.y;
+
+  // Unrotate point by -rotation into ellipse canonical frame
+  const cosRot = Math.cos(-params.rotation);
+  const sinRot = Math.sin(-params.rotation);
+  const u = dx * cosRot - dy * sinRot;
+  const v = dx * sinRot + dy * cosRot;
+
+  const t = Math.hypot(u / params.radiusX, v / params.radiusY);
+  if (t === 0) return Math.min(params.radiusX, params.radiusY);
+
+  const distToOrigin = Math.hypot(u, v);
+  const distToPerimeter = Math.abs(distToOrigin * (1 - 1 / t));
+
+  // If arc is not full circle, check angles
+  if (params.endAngleRad - params.startAngleRad < Math.PI * 1.99) {
+    let angle = Math.atan2(v, u);
+    if (angle < 0) angle += Math.PI * 2;
+    if (angle < params.startAngleRad || angle > params.endAngleRad) {
+      const pStartX = params.centerScreen.x + params.radiusX * Math.cos(params.startAngleRad) * Math.cos(params.rotation) - params.radiusY * Math.sin(params.startAngleRad) * Math.sin(params.rotation);
+      const pStartY = params.centerScreen.y + params.radiusX * Math.cos(params.startAngleRad) * Math.sin(params.rotation) + params.radiusY * Math.sin(params.startAngleRad) * Math.cos(params.rotation);
+      const pEndX = params.centerScreen.x + params.radiusX * Math.cos(params.endAngleRad) * Math.cos(params.rotation) - params.radiusY * Math.sin(params.endAngleRad) * Math.sin(params.rotation);
+      const pEndY = params.centerScreen.y + params.radiusX * Math.cos(params.endAngleRad) * Math.sin(params.rotation) + params.radiusY * Math.sin(params.endAngleRad) * Math.cos(params.rotation);
+      return Math.min(
+        Math.hypot(screenPt.x - pStartX, screenPt.y - pStartY),
+        Math.hypot(screenPt.x - pEndX, screenPt.y - pEndY)
+      );
+    }
+  }
+
+  return distToPerimeter;
+}

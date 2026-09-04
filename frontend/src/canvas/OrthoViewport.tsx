@@ -1,11 +1,12 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { DrawingLine, ScreenPoint } from '../types/drawing';
-import { OrthoViewType, projectToOrthoView, OrthoLine2D } from '../geometry/orthographic';
+import { DrawingLine, DrawingArc, ScreenPoint } from '../types/drawing';
+import { OrthoViewType, projectToOrthoView, OrthoLine2D, OrthoArc2D } from '../geometry/orthographic';
 
 interface OrthoViewportProps {
   title: string;
   viewType: OrthoViewType;
   lines: DrawingLine[];
+  arcs?: DrawingArc[];
   selectedLineId?: string | null;
   onSelectLine?: (lineId: string | null) => void;
   hideOccluded?: boolean;
@@ -27,6 +28,7 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
   title,
   viewType,
   lines,
+  arcs = [],
   selectedLineId,
   onSelectLine,
   hideOccluded = true,
@@ -34,6 +36,7 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const projectedLinesRef = useRef<OrthoLine2D[]>([]);
+  const projectedArcsRef = useRef<OrthoArc2D[]>([]);
 
   const renderCanvas = useCallback(() => {
     const container = containerRef.current;
@@ -72,14 +75,18 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
     }
     ctx.stroke();
 
-    // 2. Project geometry lines using Virtual Camera and Occlusion
-    const { projectedLines } = projectToOrthoView(lines, viewType, { width, height }, 14, { hideOccluded });
+    // 2. Project geometry lines and arcs using Virtual Camera and Occlusion
+    const { projectedLines, projectedArcs } = projectToOrthoView(lines, viewType, { width, height }, 14, {
+      hideOccluded,
+      arcs,
+    });
     projectedLinesRef.current = projectedLines;
+    projectedArcsRef.current = projectedArcs;
 
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // Draw unselected lines in order of depth (back to front)
+    // Draw unselected lines
     projectedLines.forEach((l) => {
       const isSelected = l.id === selectedLineId;
       if (isSelected) return;
@@ -96,6 +103,26 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
       ctx.beginPath();
       ctx.arc(l.start.x, l.start.y, 2, 0, Math.PI * 2);
       ctx.arc(l.end.x, l.end.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // Draw unselected arcs/circles
+    projectedArcs.forEach((a) => {
+      const isSelected = a.id === selectedLineId;
+      if (isSelected) return;
+
+      ctx.strokeStyle = '#1f2937';
+      ctx.lineWidth = 1.75;
+      ctx.beginPath();
+      const sRad = (a.startAngle * Math.PI) / 180;
+      const eRad = (a.endAngle * Math.PI) / 180;
+      ctx.arc(a.center.x, a.center.y, a.radius, sRad, eRad);
+      ctx.stroke();
+
+      // Center mark
+      ctx.fillStyle = '#9ca3af';
+      ctx.beginPath();
+      ctx.arc(a.center.x, a.center.y, 1.5, 0, Math.PI * 2);
       ctx.fill();
     });
 
@@ -127,13 +154,42 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
       ctx.arc(l.end.x, l.end.y, 3.5, 0, Math.PI * 2);
       ctx.fill();
     });
-  }, [lines, viewType, selectedLineId]);
+
+    // Draw selected arc with prominent halo
+    projectedArcs.forEach((a) => {
+      const isSelected = a.id === selectedLineId;
+      if (!isSelected) return;
+
+      const sRad = (a.startAngle * Math.PI) / 180;
+      const eRad = (a.endAngle * Math.PI) / 180;
+
+      // Selection halo
+      ctx.strokeStyle = '#9ca3af';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(a.center.x, a.center.y, a.radius, sRad, eRad);
+      ctx.stroke();
+
+      // Main stroke
+      ctx.strokeStyle = '#111827';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(a.center.x, a.center.y, a.radius, sRad, eRad);
+      ctx.stroke();
+
+      // Center mark
+      ctx.fillStyle = '#111827';
+      ctx.beginPath();
+      ctx.arc(a.center.x, a.center.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }, [lines, arcs, viewType, selectedLineId, hideOccluded]);
 
   useEffect(() => {
     renderCanvas();
   }, [renderCanvas]);
 
-  // Click interaction: select ONLY the front-most line along the camera view
+  // Click interaction: select ONLY the front-most entity along the camera view
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!onSelectLine) return;
 
@@ -145,12 +201,21 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
       y: e.clientY - rect.top,
     };
 
-    // Find all lines within 10px click radius
-    const candidates: { line: OrthoLine2D; dist: number }[] = [];
+    // Find all entities (lines & circles) within 10px click radius
+    const candidates: { id: string; depth: number; dist: number }[] = [];
+
     projectedLinesRef.current.forEach((line) => {
       const d = distanceToSegment(clickPt, line.start, line.end);
       if (d < 10) {
-        candidates.push({ line, dist: d });
+        candidates.push({ id: line.id, depth: line.depth, dist: d });
+      }
+    });
+
+    projectedArcsRef.current.forEach((arc) => {
+      const dCenter = Math.hypot(clickPt.x - arc.center.x, clickPt.y - arc.center.y);
+      const d = Math.abs(dCenter - arc.radius);
+      if (d < 10) {
+        candidates.push({ id: arc.id, depth: arc.depth, dist: d });
       }
     });
 
@@ -159,17 +224,17 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
       return;
     }
 
-    // Sort by depth descending (front-most lines first), secondary sort by proximity
+    // Sort by depth descending (front-most entity first), secondary sort by proximity
     candidates.sort((a, b) => {
-      const depthDiff = b.line.depth - a.line.depth;
+      const depthDiff = b.depth - a.depth;
       if (Math.abs(depthDiff) > 0.05) {
         return depthDiff;
       }
       return a.dist - b.dist;
     });
 
-    // Select the front-most line
-    onSelectLine(candidates[0].line.id);
+    // Select the front-most entity
+    onSelectLine(candidates[0].id);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -182,11 +247,15 @@ export const OrthoViewport: React.FC<OrthoViewportProps> = ({
       y: e.clientY - rect.top,
     };
 
-    const isHovering = projectedLinesRef.current.some(
+    const isHoveringLine = projectedLinesRef.current.some(
       (l) => distanceToSegment(mousePt, l.start, l.end) < 10
     );
+    const isHoveringArc = projectedArcsRef.current.some((a) => {
+      const d = Math.abs(Math.hypot(mousePt.x - a.center.x, mousePt.y - a.center.y) - a.radius);
+      return d < 10;
+    });
 
-    canvas.style.cursor = isHovering ? 'pointer' : 'default';
+    canvas.style.cursor = isHoveringLine || isHoveringArc ? 'pointer' : 'default';
   };
 
   return (

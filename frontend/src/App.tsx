@@ -9,6 +9,7 @@ import { OrthoPanel } from './components/OrthoPanel';
 import { StatusBar } from './components/StatusBar';
 import { SettingsModal } from './components/SettingsModal';
 import { IsometricCanvas } from './canvas/IsometricCanvas';
+import { Three3DCanvas } from './canvas/Three3DCanvas';
 import { AxisIndicator } from './canvas/AxisIndicator';
 import { OrientationGizmo } from './canvas/OrientationGizmo';
 import { DrawVizProject } from './types/drawing';
@@ -57,6 +58,10 @@ export const App: React.FC = () => {
         case 'l':
           state.setActiveTool('line');
           setStatusMessage('Tool: Line');
+          break;
+        case 'c':
+          state.setActiveTool('circle');
+          setStatusMessage('Tool: Circle / Isocircle');
           break;
         case 'e':
           state.setActiveTool('eraser');
@@ -110,6 +115,7 @@ export const App: React.FC = () => {
       gridSettings: state.gridSettings,
       layers: state.layers,
       lines: state.lines,
+      arcs: state.arcs,
       activeLessonId: state.activeLessonId,
     };
 
@@ -145,8 +151,9 @@ export const App: React.FC = () => {
         const filePath = await wailsGo.OpenFileDialog();
         if (filePath) {
           const project: DrawVizProject = await wailsGo.LoadProject(filePath);
-          if (project && project.lines) {
-            state.setLinesState(project.lines);
+          if (project && (project.lines || project.arcs)) {
+            state.setLinesState(project.lines || []);
+            state.setArcs(project.arcs || []);
             if (project.layers) state.layers.splice(0, state.layers.length, ...project.layers);
             if (project.gridSettings) state.setGridSettings(project.gridSettings);
             setStatusMessage(`Loaded ${filePath}`);
@@ -169,8 +176,9 @@ export const App: React.FC = () => {
       reader.onload = (evt) => {
         try {
           const project = JSON.parse(evt.target?.result as string) as DrawVizProject;
-          if (project && project.lines) {
-            state.setLinesState(project.lines);
+          if (project && (project.lines || project.arcs)) {
+            state.setLinesState(project.lines || []);
+            state.setArcs(project.arcs || []);
             if (project.layers) state.layers.splice(0, state.layers.length, ...project.layers);
             if (project.gridSettings) state.setGridSettings(project.gridSettings);
             setStatusMessage(`Loaded ${file.name}`);
@@ -277,32 +285,65 @@ export const App: React.FC = () => {
             minWidth: 0,
           }}
         >
-          {/* Main Isometric Canvas */}
+          {/* Main 3D Canvas */}
           <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-            <AxisIndicator />
-            <OrientationGizmo />
-            <IsometricCanvas
+            <Three3DCanvas
               lines={state.lines}
+              arcs={state.arcs}
               activeLayerId={state.activeLayerId}
               selectedLineId={state.selectedLineId}
+              selectedArcId={state.selectedArcId}
               activeTool={state.activeTool}
               gridSettings={state.gridSettings}
-              viewport={state.viewport}
               activeAnchor={state.activeAnchor}
               activeElevation={state.activeElevation}
               activeIsoplane={state.activeIsoplane}
-              onSelectLine={state.setSelectedLineId}
+              selectionMode={state.selectionMode}
+              selectedVertex={state.selectedVertex}
+              selectedFace={state.selectedFace}
+              onSetSelectionMode={(mode) => {
+                state.setSelectionMode(mode);
+                setStatusMessage(`Selection Mode: ${mode.toUpperCase()}`);
+              }}
+              onSelectVertex={(v) => {
+                state.setSelectedVertex(v);
+                if (v) setStatusMessage(`Selected Vertex (${v.x}, ${v.y}, ${v.z || 0})`);
+              }}
+              onSelectFace={(f) => {
+                state.setSelectedFace(f);
+                if (f) setStatusMessage(`Selected ${f.plane.toUpperCase()} Face at Elev ${f.elevation}`);
+              }}
+              onSelectLine={(id) => {
+                state.setSelectedLineId(id);
+                if (id) {
+                  state.setSelectedArcId(null);
+                  setStatusMessage(`Selected Line ${id}`);
+                }
+              }}
+              onSelectArc={(id) => {
+                state.setSelectedArcId(id);
+                if (id) {
+                  state.setSelectedLineId(null);
+                  setStatusMessage(`Selected Circle ${id}`);
+                }
+              }}
               onAddLine={(line) => {
                 state.addLine(line);
-                setStatusMessage(`Line created (${state.lines.length + 1} total)`);
+                setStatusMessage(`3D Line created (${state.lines.length + 1} total)`);
+              }}
+              onAddArc={(arc) => {
+                state.addArc(arc);
+                setStatusMessage(`3D Circle created [${arc.plane.toUpperCase()}] R: ${arc.radius}`);
               }}
               onRemoveLine={(id) => {
                 state.removeLine(id);
                 setStatusMessage('Line removed');
               }}
-              onSetViewport={state.setViewport}
+              onRemoveArc={(id) => {
+                state.removeArc(id);
+                setStatusMessage('Circle removed');
+              }}
               onSetAnchor={state.setActiveAnchor}
-              onCursorUpdate={state.setCursorState}
               onSetElevation={(elev) => {
                 state.setActiveElevation(elev);
                 setStatusMessage(`Active Elevation set to Z = ${elev >= 0 ? `+${elev}` : elev}`);
@@ -314,16 +355,18 @@ export const App: React.FC = () => {
             />
           </div>
 
-          {/* Bottom Collapsible Orthographic Multi-Views */}
+          {/* Bottom Collapsible Orthographic Multi-Views (WebGL Cameras) */}
           <OrthoPanel
             lines={state.lines}
+            arcs={state.arcs}
             isOpen={state.showOrthoPanel}
             onToggle={() => state.setShowOrthoPanel(!state.showOrthoPanel)}
-            selectedLineId={state.selectedLineId}
+            selectedLineId={state.selectedLineId || state.selectedArcId}
             onSelectLine={(id) => {
               state.setSelectedLineId(id);
+              state.setSelectedArcId(id);
               if (id) {
-                setStatusMessage(`Selected line ${id} from orthographic projection`);
+                setStatusMessage(`Selected entity from camera projection`);
               }
             }}
           />
@@ -347,7 +390,11 @@ export const App: React.FC = () => {
         >
           <PropertyPanel
             selectedLine={state.selectedLine}
+            selectedArc={state.selectedArc}
+            selectedVertex={state.selectedVertex}
+            selectedFace={state.selectedFace}
             totalLines={state.lines.length}
+            totalArcs={state.arcs.length}
             layers={state.layers}
             unitSize={state.gridSettings.unitSize}
             zoom={state.viewport.zoom}
@@ -356,10 +403,20 @@ export const App: React.FC = () => {
               state.removeLine(id);
               setStatusMessage('Deleted line');
             }}
+            onDeleteArc={(id) => {
+              state.removeArc(id);
+              setStatusMessage('Deleted isocircle');
+            }}
             onUpdateLineStyle={(id, style) => {
               state.setLines((prev) =>
                 prev.map((l) => (l.id === id ? { ...l, style: { ...l.style, ...style } } : l))
               );
+            }}
+            onSketchOnFace={(face) => {
+              state.setActiveIsoplane(face.plane);
+              state.setActiveElevation(face.elevation);
+              state.setActiveTool('line');
+              setStatusMessage(`Drafting Grid aligned to Face [${face.plane.toUpperCase()}] Elev ${face.elevation}`);
             }}
           />
 
@@ -386,7 +443,6 @@ export const App: React.FC = () => {
 
       {/* 3. Bottom Status Bar */}
       <StatusBar
-        cursorState={state.cursorState}
         snapEnabled={state.gridSettings.snapToGrid}
         zoom={state.viewport.zoom}
         activeElevation={state.activeElevation}

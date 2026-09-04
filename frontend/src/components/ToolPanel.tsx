@@ -3,6 +3,7 @@ import { ToolType, GridSettings, AppMode } from '../types/drawing';
 import { IsoplaneType } from '../geometry/isometric';
 import {
   PenLine,
+  Circle,
   Eraser,
   MousePointer,
   Hand,
@@ -44,6 +45,7 @@ export const ToolPanel: React.FC<ToolPanelProps> = ({
 }) => {
   const tools: { id: ToolType; label: string; icon: React.ReactNode; shortcut: string }[] = [
     { id: 'line', label: 'Line', icon: <PenLine size={16} />, shortcut: 'L' },
+    { id: 'circle', label: 'Circle', icon: <Circle size={16} />, shortcut: 'C' },
     { id: 'eraser', label: 'Erase', icon: <Eraser size={16} />, shortcut: 'E' },
     { id: 'select', label: 'Select', icon: <MousePointer size={16} />, shortcut: 'V' },
     { id: 'pan', label: 'Pan', icon: <Hand size={16} />, shortcut: 'H / Space' },

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   AppMode,
   DrawingLine,
+  DrawingArc,
   GridSettings,
   Layer,
   Point3D,
@@ -18,6 +19,11 @@ export interface CursorState {
   snapType: string;
   angleDeg?: number;
   hostPlane?: HostPlaneInfo;
+}
+
+interface HistorySnapshot {
+  lines: DrawingLine[];
+  arcs: DrawingArc[];
 }
 
 const DEFAULT_LAYERS: Layer[] = [
@@ -41,9 +47,11 @@ const INITIAL_DEMO_LINES: DrawingLine[] = STEPPED_INCLINE_TARGET_LINES.map((l) =
 
 export function useDrawingState() {
   const [lines, setLinesState] = useState<DrawingLine[]>(INITIAL_DEMO_LINES);
+  const [arcs, setArcsState] = useState<DrawingArc[]>([]);
   const [layers, setLayers] = useState<Layer[]>(DEFAULT_LAYERS);
   const [activeLayerId, setActiveLayerId] = useState<string>('layer-1');
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
+  const [selectedArcId, setSelectedArcId] = useState<string | null>(null);
   const [activeTool, setActiveTool] = useState<ToolType>('line');
   const [gridSettings, setGridSettingsState] = useState<GridSettings>(DEFAULT_GRID_SETTINGS);
   const [viewport, setViewportState] = useState<ViewportTransform>({
@@ -62,13 +70,36 @@ export function useDrawingState() {
   const [showOrthoPanel, setShowOrthoPanel] = useState<boolean>(true);
   const [activeElevation, setActiveElevation] = useState<number>(0);
   const [activeIsoplane, setActiveIsoplane] = useState<IsoplaneType>('top');
+  const [selectionMode, setSelectionMode] = useState<import('../types/drawing').SelectionMode>('edge');
+  const [selectedVertex, setSelectedVertex] = useState<Point3D | null>(null);
+  const [selectedFace, setSelectedFace] = useState<import('../types/drawing').Face3D | null>(null);
 
-  // History stack for Undo/Redo
-  const [undoStack, setUndoStack] = useState<DrawingLine[][]>([]);
-  const [redoStack, setRedoStack] = useState<DrawingLine[][]>([]);
+  // Keyboard shortcut listener for Blender-style 1, 2, 3 modes
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing in an input or textarea
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      if (e.key === '1') {
+        setSelectionMode('vertex');
+      } else if (e.key === '2') {
+        setSelectionMode('edge');
+      } else if (e.key === '3') {
+        setSelectionMode('face');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
-  const pushToHistory = useCallback((currentLines: DrawingLine[]) => {
-    setUndoStack((prev) => [...prev.slice(-30), currentLines]);
+  // History stack for Undo/Redo (stores both lines & arcs)
+  const [undoStack, setUndoStack] = useState<HistorySnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<HistorySnapshot[]>([]);
+
+  const pushToHistory = useCallback((currentLines: DrawingLine[], currentArcs: DrawingArc[]) => {
+    setUndoStack((prev) => [...prev.slice(-30), { lines: currentLines, arcs: currentArcs }]);
     setRedoStack([]);
   }, []);
 
@@ -76,51 +107,87 @@ export function useDrawingState() {
     (newLines: DrawingLine[] | ((prev: DrawingLine[]) => DrawingLine[])) => {
       setLinesState((prev) => {
         const next = typeof newLines === 'function' ? newLines(prev) : newLines;
-        pushToHistory(prev);
+        pushToHistory(prev, arcs);
         return next;
       });
     },
-    [pushToHistory]
+    [pushToHistory, arcs]
   );
 
   const addLine = useCallback(
     (line: DrawingLine) => {
       setLinesState((prev) => {
-        pushToHistory(prev);
+        pushToHistory(prev, arcs);
         return [...prev, line];
       });
     },
-    [pushToHistory]
+    [pushToHistory, arcs]
   );
 
   const removeLine = useCallback(
     (id: string) => {
       setLinesState((prev) => {
-        pushToHistory(prev);
+        pushToHistory(prev, arcs);
         return prev.filter((l) => l.id !== id);
       });
       if (selectedLineId === id) setSelectedLineId(null);
     },
-    [pushToHistory, selectedLineId]
+    [pushToHistory, arcs, selectedLineId]
+  );
+
+  const setArcs = useCallback(
+    (newArcs: DrawingArc[] | ((prev: DrawingArc[]) => DrawingArc[])) => {
+      setArcsState((prev) => {
+        const next = typeof newArcs === 'function' ? newArcs(prev) : newArcs;
+        pushToHistory(lines, prev);
+        return next;
+      });
+    },
+    [pushToHistory, lines]
+  );
+
+  const addArc = useCallback(
+    (arc: DrawingArc) => {
+      setArcsState((prev) => {
+        pushToHistory(lines, prev);
+        return [...prev, arc];
+      });
+    },
+    [pushToHistory, lines]
+  );
+
+  const removeArc = useCallback(
+    (id: string) => {
+      setArcsState((prev) => {
+        pushToHistory(lines, prev);
+        return prev.filter((a) => a.id !== id);
+      });
+      if (selectedArcId === id) setSelectedArcId(null);
+    },
+    [pushToHistory, lines, selectedArcId]
   );
 
   const undo = useCallback(() => {
     if (undoStack.length === 0) return;
     const previous = undoStack[undoStack.length - 1];
     setUndoStack((prev) => prev.slice(0, -1));
-    setRedoStack((prev) => [...prev, lines]);
-    setLinesState(previous);
+    setRedoStack((prev) => [...prev, { lines, arcs }]);
+    setLinesState(previous.lines);
+    setArcsState(previous.arcs);
     setSelectedLineId(null);
-  }, [undoStack, lines]);
+    setSelectedArcId(null);
+  }, [undoStack, lines, arcs]);
 
   const redo = useCallback(() => {
     if (redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1];
     setRedoStack((prev) => prev.slice(0, -1));
-    setUndoStack((prev) => [...prev, lines]);
-    setLinesState(next);
+    setUndoStack((prev) => [...prev, { lines, arcs }]);
+    setLinesState(next.lines);
+    setArcsState(next.arcs);
     setSelectedLineId(null);
-  }, [redoStack, lines]);
+    setSelectedArcId(null);
+  }, [redoStack, lines, arcs]);
 
   const setViewport = useCallback((updates: Partial<ViewportTransform>) => {
     setViewportState((prev) => ({ ...prev, ...updates }));
@@ -131,11 +198,13 @@ export function useDrawingState() {
   }, []);
 
   const resetCanvas = useCallback(() => {
-    pushToHistory(lines);
+    pushToHistory(lines, arcs);
     setLinesState([]);
+    setArcsState([]);
     setSelectedLineId(null);
+    setSelectedArcId(null);
     setActiveAnchor(null);
-  }, [lines, pushToHistory]);
+  }, [lines, arcs, pushToHistory]);
 
   const addLayer = useCallback(() => {
     const newId = `layer-${layers.length + 1}`;
@@ -161,6 +230,7 @@ export function useDrawingState() {
       if (layers.length <= 1) return;
       setLayers((prev) => prev.filter((ly) => ly.id !== layerId));
       setLinesState((prev) => prev.filter((l) => l.layerId !== layerId));
+      setArcsState((prev) => prev.filter((a) => a.layerId !== layerId));
       if (activeLayerId === layerId) {
         const remaining = layers.filter((ly) => ly.id !== layerId);
         setActiveLayerId(remaining[0].id);
@@ -202,6 +272,14 @@ export function useDrawingState() {
     addLayer,
     toggleLayerVisibility,
     deleteLayer,
+    arcs,
+    setArcsState,
+    setArcs,
+    addArc,
+    removeArc,
+    selectedArcId,
+    setSelectedArcId,
+    selectedArc: arcs.find((a) => a.id === selectedArcId) || null,
     showOrthoPanel,
     setShowOrthoPanel,
     undo,
@@ -213,5 +291,11 @@ export function useDrawingState() {
     setActiveElevation,
     activeIsoplane,
     setActiveIsoplane,
+    selectionMode,
+    setSelectionMode,
+    selectedVertex,
+    setSelectedVertex,
+    selectedFace,
+    setSelectedFace,
   };
 }

@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { DrawingLine, Point3D, ScreenPoint, ToolType, GridSettings } from '../types/drawing';
+import { DrawingLine, DrawingArc, Point3D, ScreenPoint, ToolType, GridSettings } from '../types/drawing';
 import {
   gridToWorld,
   worldToScreen,
@@ -8,14 +8,18 @@ import {
   COS_30,
   TAN_30,
   IsoplaneType,
+  getIsocircleEllipseParams,
+  distanceToIsocircle,
 } from '../geometry/isometric';
 import { calculateSnap, SnapResult } from '../geometry/snapping';
 import { CursorState } from '../state/drawingState';
 
 interface IsometricCanvasProps {
   lines: DrawingLine[];
+  arcs?: DrawingArc[];
   activeLayerId: string;
   selectedLineId: string | null;
+  selectedArcId?: string | null;
   activeTool: ToolType;
   gridSettings: GridSettings;
   viewport: ViewportTransform;
@@ -23,8 +27,11 @@ interface IsometricCanvasProps {
   activeElevation?: number;
   activeIsoplane?: IsoplaneType;
   onSelectLine: (id: string | null) => void;
+  onSelectArc?: (id: string | null) => void;
   onAddLine: (line: DrawingLine) => void;
+  onAddArc?: (arc: DrawingArc) => void;
   onRemoveLine: (id: string) => void;
+  onRemoveArc?: (id: string) => void;
   onSetViewport: (transform: Partial<ViewportTransform>) => void;
   onSetAnchor: (anchor: Point3D | null) => void;
   onCursorUpdate: (state: CursorState) => void;
@@ -46,8 +53,10 @@ function distanceToSegment(p: ScreenPoint, a: ScreenPoint, b: ScreenPoint): numb
 
 export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
   lines,
+  arcs = [],
   activeLayerId,
   selectedLineId,
+  selectedArcId = null,
   activeTool,
   gridSettings,
   viewport,
@@ -55,8 +64,11 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
   activeElevation = 0,
   activeIsoplane = 'top',
   onSelectLine,
+  onSelectArc,
   onAddLine,
+  onAddArc,
   onRemoveLine,
+  onRemoveArc,
   onSetViewport,
   onSetAnchor,
   onCursorUpdate,
@@ -255,8 +267,63 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       ctx.fill();
     });
 
+    // Render Isocircles & Arcs
+    arcs.forEach((arc) => {
+      const isSelected = arc.id === selectedArcId;
+      const params = getIsocircleEllipseParams(
+        arc.center,
+        arc.radius,
+        arc.plane,
+        gridSettings.unitSize,
+        viewport,
+        arc.startAngle ?? 0,
+        arc.endAngle ?? 360
+      );
+
+      if (isSelected) {
+        // Selection halo
+        ctx.strokeStyle = '#9ca3af';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.ellipse(
+          params.centerScreen.x,
+          params.centerScreen.y,
+          params.radiusX,
+          params.radiusY,
+          params.rotation,
+          params.startAngleRad,
+          params.endAngleRad
+        );
+        ctx.stroke();
+      }
+
+      // Circle stroke
+      ctx.strokeStyle = isSelected ? '#111827' : arc.style?.stroke || '#1f2937';
+      ctx.lineWidth = arc.style?.strokeWidth || 1.75;
+      ctx.setLineDash(arc.style?.lineType === 'dashed' ? [6, 4] : []);
+
+      ctx.beginPath();
+      ctx.ellipse(
+        params.centerScreen.x,
+        params.centerScreen.y,
+        params.radiusX,
+        params.radiusY,
+        params.rotation,
+        params.startAngleRad,
+        params.endAngleRad
+      );
+      ctx.stroke();
+
+      // Center dot mark
+      ctx.setLineDash([]);
+      ctx.fillStyle = isSelected ? '#111827' : '#6b7280';
+      ctx.beginPath();
+      ctx.arc(params.centerScreen.x, params.centerScreen.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
     ctx.restore();
-  }, [lines, selectedLineId, viewport, gridSettings.unitSize]);
+  }, [lines, arcs, selectedLineId, selectedArcId, viewport, gridSettings.unitSize]);
 
   // 3. Render Interactive Live Overlay
   const renderOverlay = useCallback(() => {
@@ -321,6 +388,86 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       ctx.fill();
     }
 
+    // 1b. Live preview circle / isocircle if circle tool active
+    if (activeTool === 'circle' && activeAnchor) {
+      const anchorWorld = gridToWorld(
+        activeAnchor.x,
+        activeAnchor.y,
+        activeAnchor.z,
+        gridSettings.unitSize
+      );
+      const anchorScreen = worldToScreen(anchorWorld, viewport);
+
+      const dx = snap.logical.x - activeAnchor.x;
+      const dy = snap.logical.y - activeAnchor.y;
+      const dz = (snap.logical.z || 0) - (activeAnchor.z || 0);
+      let logicalRadius = Math.round(Math.hypot(dx, dy, dz));
+      if (logicalRadius <= 0) logicalRadius = 1;
+
+      const params = getIsocircleEllipseParams(
+        activeAnchor,
+        logicalRadius,
+        activeIsoplane,
+        gridSettings.unitSize,
+        viewport
+      );
+
+      // Ellipse preview
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 1.75;
+      ctx.setLineDash([5, 3]);
+      ctx.beginPath();
+      ctx.ellipse(
+        params.centerScreen.x,
+        params.centerScreen.y,
+        params.radiusX,
+        params.radiusY,
+        params.rotation,
+        0,
+        Math.PI * 2
+      );
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Radius ray from center to cursor
+      ctx.strokeStyle = '#818cf8';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 4]);
+      ctx.beginPath();
+      ctx.moveTo(anchorScreen.x, anchorScreen.y);
+      ctx.lineTo(snap.screen.x, snap.screen.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Center dot
+      ctx.fillStyle = '#4f46e5';
+      ctx.beginPath();
+      ctx.arc(anchorScreen.x, anchorScreen.y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Dimension badge
+      const badge = `Isocircle [${activeIsoplane.toUpperCase()}] R: ${logicalRadius} • Ø ${logicalRadius * 2}`;
+      ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+      const bMetrics = ctx.measureText(badge);
+      const bW = bMetrics.width + 12;
+      const bH = 20;
+      const bX = (anchorScreen.x + snap.screen.x) / 2 + 10;
+      const bY = (anchorScreen.y + snap.screen.y) / 2 - 10;
+
+      ctx.fillStyle = 'rgba(79, 70, 229, 0.95)';
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(bX, bY, bW, bH, 4);
+      } else {
+        ctx.rect(bX, bY, bW, bH);
+      }
+      ctx.fill();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(badge, bX + 6, bY + bH / 2);
+    }
+
     // 2. Line / Edge Snap Highlight
     if (snap.snapType === 'line-edge' && snap.snappedLineId) {
       const targetLine = lines.find((l) => l.id === snap.snappedLineId);
@@ -341,7 +488,7 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
     }
 
     // 3. Snapping Target Indicator
-    if (activeTool === 'line' || activeTool === 'select') {
+    if (activeTool === 'line' || activeTool === 'circle' || activeTool === 'select') {
       const { x, y } = snap.screen;
 
       if (snap.snapType === 'line-edge') {
@@ -414,7 +561,7 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
     }
 
     ctx.restore();
-  }, [activeTool, activeAnchor, lines, viewport, gridSettings.unitSize]);
+  }, [activeTool, activeAnchor, lines, viewport, gridSettings.unitSize, activeIsoplane]);
 
   // Pointer Event Handlers
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -464,9 +611,32 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
           onSetAnchor(snap.logical);
         }
       }
+    } else if (activeTool === 'circle') {
+      if (!activeAnchor) {
+        // Pick circle center
+        onSetAnchor(snap.logical);
+      } else {
+        const dx = snap.logical.x - activeAnchor.x;
+        const dy = snap.logical.y - activeAnchor.y;
+        const dz = (snap.logical.z || 0) - (activeAnchor.z || 0);
+        let radius = Math.round(Math.hypot(dx, dy, dz));
+        if (radius <= 0) radius = 1;
+
+        const newArc: DrawingArc = {
+          id: `arc-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          center: { ...activeAnchor },
+          radius,
+          plane: activeIsoplane,
+          layerId: activeLayerId,
+          style: { stroke: '#111827', strokeWidth: 1.75, lineType: 'solid' },
+        };
+        onAddArc?.(newArc);
+        onSetAnchor(null);
+      }
     } else if (activeTool === 'select' || activeTool === 'eraser') {
-      // Find line under cursor
+      // Find line or arc under cursor
       let hitLineId: string | null = null;
+      let hitArcId: string | null = null;
       let minDistance = 8; // Screen px tolerance
 
       lines.forEach((line) => {
@@ -479,13 +649,34 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
         if (d < minDistance) {
           minDistance = d;
           hitLineId = line.id;
+          hitArcId = null;
+        }
+      });
+
+      arcs.forEach((arc) => {
+        const d = distanceToIsocircle(
+          screenPt,
+          arc.center,
+          arc.radius,
+          arc.plane,
+          gridSettings.unitSize,
+          viewport,
+          arc.startAngle ?? 0,
+          arc.endAngle ?? 360
+        );
+        if (d < minDistance) {
+          minDistance = d;
+          hitArcId = arc.id;
+          hitLineId = null;
         }
       });
 
       if (activeTool === 'select') {
         onSelectLine(hitLineId);
-      } else if (activeTool === 'eraser' && hitLineId) {
-        onRemoveLine(hitLineId);
+        onSelectArc?.(hitArcId);
+      } else if (activeTool === 'eraser') {
+        if (hitLineId) onRemoveLine(hitLineId);
+        if (hitArcId) onRemoveArc?.(hitArcId);
       }
     }
   };

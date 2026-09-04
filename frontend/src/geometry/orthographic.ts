@@ -1,4 +1,4 @@
-import { DrawingLine, Point3D, ScreenPoint } from '../types/drawing';
+import { DrawingLine, DrawingArc, Point3D, ScreenPoint } from '../types/drawing';
 
 export interface OrthoLine2D {
   id: string;
@@ -6,6 +6,17 @@ export interface OrthoLine2D {
   end: ScreenPoint;
   layerId: string;
   depth: number; // Camera depth for front-line priority selection
+  isOccluded?: boolean;
+}
+
+export interface OrthoArc2D {
+  id: string;
+  center: ScreenPoint;
+  radius: number;
+  startAngle: number;
+  endAngle: number;
+  layerId: string;
+  depth: number;
   isOccluded?: boolean;
 }
 
@@ -164,11 +175,17 @@ export function projectToOrthoView(
   viewType: OrthoViewType,
   bounds: { width: number; height: number },
   gridCellSize: number = 20,
-  options: { hideOccluded?: boolean } = { hideOccluded: true }
-): { projectedLines: OrthoLine2D[]; viewBox: { minX: number; minY: number; maxX: number; maxY: number } } {
-  if (lines.length === 0) {
+  options: { hideOccluded?: boolean; arcs?: DrawingArc[] } = { hideOccluded: true }
+): {
+  projectedLines: OrthoLine2D[];
+  projectedArcs: OrthoArc2D[];
+  viewBox: { minX: number; minY: number; maxX: number; maxY: number };
+} {
+  const arcs = options.arcs || [];
+  if (lines.length === 0 && arcs.length === 0) {
     return {
       projectedLines: [],
+      projectedArcs: [],
       viewBox: { minX: 0, minY: 0, maxX: bounds.width, maxY: bounds.height },
     };
   }
@@ -226,16 +243,12 @@ export function projectToOrthoView(
       const { normal, planeDist } = face;
       if (viewType === 'front') {
         if (Math.abs(normal.x) < 0.01) return null;
-        // u = Y, v = -Z => Y = u, Z = -v. X = (planeDist - normal.y*u + normal.z*v) / normal.x
         return (planeDist - normal.y * u + normal.z * v) / normal.x;
       } else if (viewType === 'side') {
         if (Math.abs(normal.y) < 0.01) return null;
-        // u = -X, v = -Z => X = -u, Z = -v. Y = (planeDist + normal.x*u + normal.z*v) / normal.y
         return (planeDist + normal.x * u + normal.z * v) / normal.y;
       } else {
-        // 'top'
         if (Math.abs(normal.z) < 0.01) return null;
-        // u = Y, v = X => Y = u, X = v. Z = (planeDist - normal.x*v - normal.y*u) / normal.z
         return (planeDist - normal.x * v - normal.y * u) / normal.z;
       }
     };
@@ -248,7 +261,7 @@ export function projectToOrthoView(
     });
   }
 
-  // 2. Project Each Line Segment
+  // 2. Project Line Segments & Arcs
   let minU = Infinity,
     minV = Infinity,
     maxU = -Infinity,
@@ -267,7 +280,6 @@ export function projectToOrthoView(
     const c1 = projectPoint(line.start);
     const c2 = projectPoint(line.end);
 
-    // Filter out lines perpendicular to camera view that collapse to a single point
     const len = Math.hypot(c2.u - c1.u, c2.v - c1.v);
     if (len < 0.01) {
       continue;
@@ -280,20 +292,15 @@ export function projectToOrthoView(
 
     const avgDepth = (c1.depth + c2.depth) / 2;
 
-    // Occlusion Test: Is this line segment occluded by any foreground planar face?
     let isOccluded = false;
     const midU = (c1.u + c2.u) / 2;
     const midV = (c1.v + c2.v) / 2;
     const midPt: ScreenPoint = { x: midU, y: midV };
 
     for (const face of projectedFaces) {
-      // An edge that belongs to this face is not occluded by this face
       if (face.lineIds.has(line.id)) continue;
-
-      // Test if midpoint is inside the projected polygon
       if (isPointInsidePoly(midPt, face.poly2D, 0.05)) {
         const faceDepth = face.depthAtPt(midU, midV);
-        // If face is strictly in front of the line (larger depth = closer to camera)
         if (faceDepth !== null && faceDepth > avgDepth + 0.08) {
           isOccluded = true;
           break;
@@ -311,18 +318,87 @@ export function projectToOrthoView(
     });
   }
 
-  // Filter out occluded lines if hideOccluded is enabled (reference app style)
-  const visibleLines = options.hideOccluded ? rawProjected.filter((l) => !l.isOccluded) : rawProjected;
+  interface RawArc {
+    id: string;
+    center: ScreenPoint;
+    radius: number;
+    startAngle: number;
+    endAngle: number;
+    layerId: string;
+    depth: number;
+    isOccluded: boolean;
+  }
+  const rawArcs: RawArc[] = [];
 
-  if (visibleLines.length === 0) {
+  for (const arc of arcs) {
+    const c = projectPoint(arc.center);
+    minU = Math.min(minU, c.u - arc.radius);
+    maxU = Math.max(maxU, c.u + arc.radius);
+    minV = Math.min(minV, c.v - arc.radius);
+    maxV = Math.max(maxV, c.v + arc.radius);
+
+    // If arc plane matches camera view: projects as a true 2D circle / arc
+    if (arc.plane === viewType) {
+      rawArcs.push({
+        id: arc.id,
+        center: { x: c.u, y: c.v },
+        radius: arc.radius,
+        startAngle: arc.startAngle ?? 0,
+        endAngle: arc.endAngle ?? 360,
+        layerId: arc.layerId,
+        depth: c.depth,
+        isOccluded: false,
+      });
+    } else {
+      // Orthogonal isoplane: projects as a flat line segment of length 2R
+      let p1: ScreenPoint;
+      let p2: ScreenPoint;
+
+      if (arc.plane === 'top') {
+        // Horizontal line in front or side view
+        p1 = { x: c.u - arc.radius, y: c.v };
+        p2 = { x: c.u + arc.radius, y: c.v };
+      } else if (arc.plane === 'front') {
+        // In top view: along V axis; in side view: along V axis (vertical)
+        p1 = { x: c.u, y: c.v - arc.radius };
+        p2 = { x: c.u, y: c.v + arc.radius };
+      } else {
+        // arc.plane === 'side'
+        if (viewType === 'top') {
+          p1 = { x: c.u - arc.radius, y: c.v };
+          p2 = { x: c.u + arc.radius, y: c.v };
+        } else {
+          p1 = { x: c.u, y: c.v - arc.radius };
+          p2 = { x: c.u, y: c.v + arc.radius };
+        }
+      }
+
+      rawProjected.push({
+        id: arc.id,
+        p1,
+        p2,
+        layerId: arc.layerId,
+        depth: c.depth,
+        isOccluded: false,
+      });
+    }
+  }
+
+  // Filter out occluded lines if hideOccluded is enabled
+  const visibleLines = options.hideOccluded ? rawProjected.filter((l) => !l.isOccluded) : rawProjected;
+  const visibleArcs = options.hideOccluded ? rawArcs.filter((a) => !a.isOccluded) : rawArcs;
+
+  if (visibleLines.length === 0 && visibleArcs.length === 0) {
     return {
       projectedLines: [],
+      projectedArcs: [],
       viewBox: { minX: 0, minY: 0, maxX: bounds.width, maxY: bounds.height },
     };
   }
 
-  // Sort by depth so front-most lines render on top
+  // Sort by depth
   visibleLines.sort((a, b) => a.depth - b.depth);
+  visibleArcs.sort((a, b) => a.depth - b.depth);
 
   // Center and scale the projection in the given viewport bounds
   const spanU = maxU - minU || 1;
@@ -354,8 +430,23 @@ export function projectToOrthoView(
     isOccluded: item.isOccluded,
   }));
 
+  const projectedArcs: OrthoArc2D[] = visibleArcs.map((item) => ({
+    id: item.id,
+    center: {
+      x: cx + (item.center.x - centerU) * actualCell,
+      y: cy + (item.center.y - centerV) * actualCell,
+    },
+    radius: item.radius * actualCell,
+    startAngle: item.startAngle,
+    endAngle: item.endAngle,
+    layerId: item.layerId,
+    depth: item.depth,
+    isOccluded: item.isOccluded,
+  }));
+
   return {
     projectedLines,
+    projectedArcs,
     viewBox: { minX: minU, minY: minV, maxX: maxU, maxY: maxV },
   };
 }

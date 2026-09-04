@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { CursorState } from '../state/drawingState';
+import { useCursorData } from '../state/cursorStore';
 import { IsoplaneType } from '../geometry/isometric';
 import { Minus, Plus } from 'lucide-react';
 
 interface StatusBarProps {
-  cursorState: CursorState;
+  cursorState?: CursorState;
   snapEnabled: boolean;
   zoom: number;
   activeElevation: number;
@@ -17,8 +18,8 @@ interface StatusBarProps {
   statusText?: string;
 }
 
-export const StatusBar: React.FC<StatusBarProps> = ({
-  cursorState,
+export const StatusBar: React.FC<StatusBarProps> = memo(({
+  cursorState: propCursorState,
   snapEnabled,
   zoom,
   activeElevation,
@@ -30,6 +31,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onSetIsoplane,
   statusText = 'Ready',
 }) => {
+  const storeCursorState = useCursorData();
+  const cursorState = propCursorState || storeCursorState;
   return (
     <footer
       style={{
@@ -179,4 +182,4 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
     </footer>
   );
-};
+});

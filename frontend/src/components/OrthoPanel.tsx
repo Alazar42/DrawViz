@@ -1,18 +1,20 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { DrawingLine } from '../types/drawing';
-import { OrthoViewport } from '../canvas/OrthoViewport';
+import React, { useState, useRef, useEffect, memo } from 'react';
+import { DrawingLine, DrawingArc } from '../types/drawing';
+import { ThreeOrthoViewport } from '../canvas/ThreeOrthoViewport';
 import { ChevronDown, ChevronUp, GripHorizontal } from 'lucide-react';
 
 interface OrthoPanelProps {
   lines: DrawingLine[];
+  arcs?: DrawingArc[];
   isOpen: boolean;
   onToggle: () => void;
   selectedLineId?: string | null;
   onSelectLine?: (id: string | null) => void;
 }
 
-export const OrthoPanel: React.FC<OrthoPanelProps> = ({
+export const OrthoPanel: React.FC<OrthoPanelProps> = memo(({
   lines,
+  arcs = [],
   isOpen,
   onToggle,
   selectedLineId,
@@ -228,26 +230,29 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = ({
               overflow: 'hidden',
             }}
           >
-            <OrthoViewport
+            <ThreeOrthoViewport
               title="PLANTA (TOP)"
               viewType="top"
               lines={lines}
+              arcs={arcs}
               selectedLineId={selectedLineId}
               onSelectLine={onSelectLine}
               hideOccluded={hideOccluded}
             />
-            <OrthoViewport
+            <ThreeOrthoViewport
               title="FRONTAL (FRONT)"
               viewType="front"
               lines={lines}
+              arcs={arcs}
               selectedLineId={selectedLineId}
               onSelectLine={onSelectLine}
               hideOccluded={hideOccluded}
             />
-            <OrthoViewport
+            <ThreeOrthoViewport
               title="LATERAL (SIDE)"
               viewType="side"
               lines={lines}
+              arcs={arcs}
               selectedLineId={selectedLineId}
               onSelectLine={onSelectLine}
               hideOccluded={hideOccluded}
@@ -267,30 +272,33 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = ({
             }}
           >
             <div style={{ gridColumn: '1 / 2', gridRow: '1 / 2', minHeight: 0 }}>
-              <OrthoViewport
+              <ThreeOrthoViewport
                 title="PLANTA (TOP)"
                 viewType="top"
                 lines={lines}
+                arcs={arcs}
                 selectedLineId={selectedLineId}
                 onSelectLine={onSelectLine}
                 hideOccluded={hideOccluded}
               />
             </div>
             <div style={{ gridColumn: '1 / 2', gridRow: '2 / 3', minHeight: 0 }}>
-              <OrthoViewport
+              <ThreeOrthoViewport
                 title="FRONTAL (FRONT)"
                 viewType="front"
                 lines={lines}
+                arcs={arcs}
                 selectedLineId={selectedLineId}
                 onSelectLine={onSelectLine}
                 hideOccluded={hideOccluded}
               />
             </div>
             <div style={{ gridColumn: '2 / 3', gridRow: '2 / 3', minHeight: 0 }}>
-              <OrthoViewport
+              <ThreeOrthoViewport
                 title="LATERAL (SIDE)"
                 viewType="side"
                 lines={lines}
+                arcs={arcs}
                 selectedLineId={selectedLineId}
                 onSelectLine={onSelectLine}
                 hideOccluded={hideOccluded}
@@ -301,4 +309,4 @@ export const OrthoPanel: React.FC<OrthoPanelProps> = ({
       )}
     </div>
   );
-};
+});
