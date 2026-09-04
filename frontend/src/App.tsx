@@ -55,6 +55,25 @@ export const App: React.FC = () => {
       }
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        const hasMulti =
+          state.selectedLineIds.length +
+          state.selectedArcIds.length +
+          state.selectedCylinderIds.length +
+          state.selectedSphereIds.length +
+          state.selectedVertices.length +
+          state.selectedFaces.length > 0;
+
+        if (hasMulti) {
+          e.preventDefault();
+          state.selectedSphereIds.forEach((id) => state.removeSphere(id));
+          state.selectedCylinderIds.forEach((id) => state.removeCylinder(id));
+          state.selectedArcIds.forEach((id) => state.removeArc(id));
+          state.selectedLineIds.forEach((id) => state.removeLine(id));
+          state.clearSelection();
+          setStatusMessage('Deleted multi-selected items');
+          return;
+        }
+
         if (state.selectedSphereId) {
           e.preventDefault();
           state.removeSphere(state.selectedSphereId);
@@ -86,14 +105,27 @@ export const App: React.FC = () => {
       }
 
       if (e.key === 'Escape') {
-        state.setSelectedLineId(null);
-        state.setSelectedArcId(null);
-        state.setSelectedCylinderId(null);
-        state.setSelectedSphereId(null);
-        state.setSelectedVertex(null);
-        state.setSelectedFace(null);
+        state.clearSelection();
         state.setActiveAnchor(null);
         setStatusMessage('Deselected all');
+        return;
+      }
+
+      if (modKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        state.selectAll();
+        setStatusMessage(`Selected all ${state.selectionMode}s (Ctrl+A)`);
+        return;
+      }
+
+      if (modKey && (e.key.toLowerCase() === 'g')) {
+        e.preventDefault();
+        const newGid = state.createGroupFromSelection();
+        if (newGid) {
+          setStatusMessage('Grouped selection (Ctrl+G)');
+        } else {
+          setStatusMessage('Select multiple items first (Shift+Click) to group');
+        }
         return;
       }
 
@@ -131,8 +163,10 @@ export const App: React.FC = () => {
           setStatusMessage('Tool: Circle / Isocircle');
           break;
         case 'a':
-          state.setActiveTool('arc');
-          setStatusMessage('Tool: Arc Creator (Click 2 vertices, manipulate R & +/- X,Y,Z)');
+          if (!modKey) {
+            state.setActiveTool('arc');
+            setStatusMessage('Tool: Arc Creator (Click 2 vertices, manipulate R & +/- X,Y,Z)');
+          }
           break;
         case 'y':
           state.setActiveTool('cylinder');
@@ -173,9 +207,21 @@ export const App: React.FC = () => {
     state.selectedArcId,
     state.selectedLineId,
     state.selectedCylinderId,
+    state.selectedSphereId,
+    state.selectedLineIds,
+    state.selectedArcIds,
+    state.selectedCylinderIds,
+    state.selectedSphereIds,
+    state.selectedVertices,
+    state.selectedFaces,
+    state.createGroupFromSelection,
+    state.clearSelection,
+    state.groupMode,
+    state.setGroupMode,
     state.removeArc,
     state.removeLine,
     state.removeCylinder,
+    state.removeSphere,
     state.setSelectedArcId,
     state.setSelectedLineId,
     state.setSelectedCylinderId,
@@ -210,6 +256,15 @@ export const App: React.FC = () => {
       lines: state.lines,
       arcs: state.arcs,
       cylinders: state.cylinders,
+      spheres: state.spheres,
+      groups: state.groups,
+      viewportConfig: {
+        projection: state.isPerspective ? 'perspective' : 'orthographic',
+        theme: state.theme,
+        activeElevation: state.activeElevation,
+        magnetSnapEnabled: true,
+        solidShading: true,
+      },
       activeLessonId: state.activeLessonId,
     };
 
@@ -239,21 +294,39 @@ export const App: React.FC = () => {
   };
 
   const handleOpenProject = async () => {
+    const applyProjectData = (project: DrawVizProject, sourceName: string) => {
+      if (project) {
+        state.setLinesState(project.lines || []);
+        state.setArcs(project.arcs || []);
+        state.setCylinders(project.cylinders || []);
+        state.setSpheres(project.spheres || []);
+        state.setGroups(project.groups || []);
+        if (project.layers) state.layers.splice(0, state.layers.length, ...project.layers);
+        if (project.gridSettings) state.setGridSettings(project.gridSettings);
+        if (project.viewportConfig) {
+          if (project.viewportConfig.projection) {
+            state.setIsPerspective(project.viewportConfig.projection === 'perspective');
+          }
+          if (project.viewportConfig.theme) {
+            state.setTheme(project.viewportConfig.theme);
+          }
+          if (typeof project.viewportConfig.activeElevation === 'number') {
+            state.setActiveElevation(project.viewportConfig.activeElevation);
+          }
+        }
+        state.clearSelection();
+        setStatusMessage(`Loaded ${sourceName}`);
+      }
+    };
+
     const wailsGo = (window as any).go?.main?.App;
     if (wailsGo && wailsGo.OpenFileDialog && wailsGo.LoadProject) {
       try {
         const filePath = await wailsGo.OpenFileDialog();
         if (filePath) {
           const project: DrawVizProject = await wailsGo.LoadProject(filePath);
-          if (project && (project.lines || project.arcs || project.cylinders)) {
-            state.setLinesState(project.lines || []);
-            state.setArcs(project.arcs || []);
-            state.setCylinders(project.cylinders || []);
-            if (project.layers) state.layers.splice(0, state.layers.length, ...project.layers);
-            if (project.gridSettings) state.setGridSettings(project.gridSettings);
-            setStatusMessage(`Loaded ${filePath}`);
-            return;
-          }
+          applyProjectData(project, filePath);
+          return;
         }
       } catch (err) {
         console.error('Open error via Wails:', err);
@@ -271,13 +344,7 @@ export const App: React.FC = () => {
       reader.onload = (evt) => {
         try {
           const project = JSON.parse(evt.target?.result as string) as DrawVizProject;
-          if (project && (project.lines || project.arcs)) {
-            state.setLinesState(project.lines || []);
-            state.setArcs(project.arcs || []);
-            if (project.layers) state.layers.splice(0, state.layers.length, ...project.layers);
-            if (project.gridSettings) state.setGridSettings(project.gridSettings);
-            setStatusMessage(`Loaded ${file.name}`);
-          }
+          applyProjectData(project, file.name);
         } catch (parseErr) {
           alert('Failed to parse .drawviz file');
         }
@@ -339,7 +406,6 @@ export const App: React.FC = () => {
         [4, 5], [5, 6], [6, 7], [7, 4],
         [0, 4], [1, 5], [2, 6], [3, 7],
       ];
-      const groupId = `group-cube-${now}`;
       const memberIds: string[] = [];
 
       edgePairs.forEach(([i, j], idx) => {
@@ -350,18 +416,15 @@ export const App: React.FC = () => {
           start: p[i],
           end: p[j],
           layerId: state.activeLayerId,
-          groupId,
           style: { stroke: state.theme === 'dark' ? '#f4f4f5' : '#111827', strokeWidth: 1.75, lineType: 'solid' },
         });
       });
 
       state.createGroup('Cube Mesh', 'mesh', memberIds);
-      state.setSelectedLineId(memberIds[0]);
       state.setActiveTool('select');
       setStatusMessage('Added 3D Cube Mesh (Grouped & Selected)');
     } else if (type === 'cylinder') {
       const cylId = `cylinder-${now}-${Math.floor(Math.random() * 1000)}`;
-      const groupId = `group-cylinder-${now}`;
       const newCyl: DrawingCylinder = {
         id: cylId,
         center: { x: x0 + s / 2, y: y0 + s / 2, z: z0 },
@@ -369,31 +432,26 @@ export const App: React.FC = () => {
         height: 6,
         normal: { x: 0, y: 0, z: 1 },
         layerId: state.activeLayerId,
-        groupId,
         style: { stroke: state.theme === 'dark' ? '#f4f4f5' : '#111827', strokeWidth: 1.75, lineType: 'solid' },
       };
       state.addCylinder(newCyl);
       state.createGroup('Cylinder Mesh', 'mesh', [cylId]);
-      state.setSelectedCylinderId(cylId);
       state.setActiveTool('select');
       setStatusMessage('Added 3D Cylinder Mesh (Grouped & Selected)');
     } else if (type === 'sphere') {
       const c = { x: x0 + s / 2, y: y0 + s / 2, z: z0 + s / 2 };
       const r = 3;
       const sphId = `sphere-${now}-${Math.floor(Math.random() * 1000)}`;
-      const groupId = `group-sphere-${now}`;
 
       const newSphere: DrawingSphere = {
         id: sphId,
         center: c,
         radius: r,
         layerId: state.activeLayerId,
-        groupId,
         style: { stroke: state.theme === 'dark' ? '#f4f4f5' : '#111827', strokeWidth: 1.75, lineType: 'solid' },
       };
       state.addSphere(newSphere);
       state.createGroup('Sphere Mesh', 'mesh', [sphId]);
-      state.setSelectedSphereId(sphId);
       state.setActiveTool('select');
       setStatusMessage('Added 3D Solid Sphere (Grouped & Selected)');
     }
@@ -495,48 +553,150 @@ export const App: React.FC = () => {
                 setStatusMessage(`Selection Mode: ${mode.toUpperCase()}`);
               }}
               onSelectVertex={(v) => {
+                if (v && state.groupMode) {
+                  const vKey = `${v.x},${v.y},${v.z || 0}`;
+                  const matchGroup = state.groups.find((g) => g.type === 'vertex' && g.memberIds.includes(vKey));
+                  if (matchGroup) {
+                    state.selectGroup(matchGroup.id);
+                    setStatusMessage(`Selected Vertex Group: ${matchGroup.name}`);
+                    return;
+                  }
+                }
                 state.setSelectedVertex(v);
-                if (v) setStatusMessage(`Selected Vertex (${v.x}, ${v.y}, ${v.z || 0})`);
+                state.setSelectedVertices(v ? [v] : []);
+                if (v) {
+                  state.setSelectedGroupId(null);
+                  setStatusMessage(`Selected Vertex (${v.x}, ${v.y}, ${v.z || 0})`);
+                }
               }}
               onSelectFace={(f) => {
+                if (f && state.groupMode) {
+                  const fKey = `face-${f.elevation}-${f.vertices.map((v) => `${v.x},${v.y}`).join('-')}`;
+                  const matchGroup = state.groups.find((g) => g.type === 'plane' && g.memberIds.includes(fKey));
+                  if (matchGroup) {
+                    state.selectGroup(matchGroup.id);
+                    setStatusMessage(`Selected Face Group: ${matchGroup.name}`);
+                    return;
+                  }
+                }
                 state.setSelectedFace(f);
-                if (f) setStatusMessage(`Selected Face at Elev ${f.elevation}`);
+                state.setSelectedFaces(f ? [f] : []);
+                if (f) {
+                  state.setSelectedGroupId(null);
+                  setStatusMessage(`Selected Face at Elev ${f.elevation}`);
+                }
               }}
               onSelectLine={(id) => {
+                if (id && state.groupMode) {
+                  const matchGroup = state.groups.find(
+                    (g) => g.memberIds.includes(id) || state.lines.find((l) => l.id === id)?.groupId === g.id
+                  );
+                  if (matchGroup) {
+                    state.selectGroup(matchGroup.id);
+                    setStatusMessage(`Selected Group: ${matchGroup.name} (${matchGroup.memberIds.length} members)`);
+                    return;
+                  }
+                }
                 state.setSelectedLineId(id);
+                state.setSelectedLineIds(id ? [id] : []);
                 if (id) {
+                  state.setSelectedGroupId(null);
                   state.setSelectedArcId(null);
+                  state.setSelectedArcIds([]);
                   state.setSelectedCylinderId(null);
+                  state.setSelectedCylinderIds([]);
                   state.setSelectedSphereId(null);
+                  state.setSelectedSphereIds([]);
+                  state.setSelectedVertex(null);
+                  state.setSelectedVertices([]);
+                  state.setSelectedFace(null);
+                  state.setSelectedFaces([]);
                   setStatusMessage(`Selected Line ${id}`);
                 }
               }}
               onSelectArc={(id) => {
+                if (id && state.groupMode) {
+                  const matchGroup = state.groups.find(
+                    (g) => g.memberIds.includes(id) || state.arcs.find((a) => a.id === id)?.groupId === g.id
+                  );
+                  if (matchGroup) {
+                    state.selectGroup(matchGroup.id);
+                    setStatusMessage(`Selected Group: ${matchGroup.name}`);
+                    return;
+                  }
+                }
                 state.setSelectedArcId(id);
+                state.setSelectedArcIds(id ? [id] : []);
                 if (id) {
+                  state.setSelectedGroupId(null);
                   state.setSelectedLineId(null);
+                  state.setSelectedLineIds([]);
                   state.setSelectedCylinderId(null);
+                  state.setSelectedCylinderIds([]);
                   state.setSelectedSphereId(null);
+                  state.setSelectedSphereIds([]);
+                  state.setSelectedVertex(null);
+                  state.setSelectedVertices([]);
+                  state.setSelectedFace(null);
+                  state.setSelectedFaces([]);
                   const targetArc = state.arcs.find((a) => a.id === id);
                   const is2V = !!(targetArc?.startPoint && targetArc?.endPoint);
                   setStatusMessage(`Selected ${is2V ? 'Two-Vertex Arc' : 'Circle'} ${id}`);
                 }
               }}
               onSelectCylinder={(id) => {
+                if (id && state.groupMode) {
+                  const matchGroup = state.groups.find(
+                    (g) => g.memberIds.includes(id) || state.cylinders.find((c) => c.id === id)?.groupId === g.id
+                  );
+                  if (matchGroup) {
+                    state.selectGroup(matchGroup.id);
+                    setStatusMessage(`Selected Group: ${matchGroup.name}`);
+                    return;
+                  }
+                }
                 state.setSelectedCylinderId(id);
+                state.setSelectedCylinderIds(id ? [id] : []);
                 if (id) {
+                  state.setSelectedGroupId(null);
                   state.setSelectedLineId(null);
+                  state.setSelectedLineIds([]);
                   state.setSelectedArcId(null);
+                  state.setSelectedArcIds([]);
                   state.setSelectedSphereId(null);
+                  state.setSelectedSphereIds([]);
+                  state.setSelectedVertex(null);
+                  state.setSelectedVertices([]);
+                  state.setSelectedFace(null);
+                  state.setSelectedFaces([]);
                   setStatusMessage(`Selected Cylinder ${id}`);
                 }
               }}
               onSelectSphere={(id) => {
+                if (id && state.groupMode) {
+                  const matchGroup = state.groups.find(
+                    (g) => g.memberIds.includes(id) || state.spheres.find((s) => s.id === id)?.groupId === g.id
+                  );
+                  if (matchGroup) {
+                    state.selectGroup(matchGroup.id);
+                    setStatusMessage(`Selected Group: ${matchGroup.name}`);
+                    return;
+                  }
+                }
                 state.setSelectedSphereId(id);
+                state.setSelectedSphereIds(id ? [id] : []);
                 if (id) {
+                  state.setSelectedGroupId(null);
                   state.setSelectedLineId(null);
+                  state.setSelectedLineIds([]);
                   state.setSelectedArcId(null);
+                  state.setSelectedArcIds([]);
                   state.setSelectedCylinderId(null);
+                  state.setSelectedCylinderIds([]);
+                  state.setSelectedVertex(null);
+                  state.setSelectedVertices([]);
+                  state.setSelectedFace(null);
+                  state.setSelectedFaces([]);
                   setStatusMessage(`Selected Sphere ${id}`);
                 }
               }}
@@ -598,6 +758,29 @@ export const App: React.FC = () => {
               onCommitTransform={state.commitTransform}
               groupMode={state.groupMode}
               groups={state.groups}
+              selectedGroupId={state.selectedGroupId}
+              onSelectGroup={state.selectGroup}
+              selectedLineIds={state.selectedLineIds}
+              selectedArcIds={state.selectedArcIds}
+              selectedCylinderIds={state.selectedCylinderIds}
+              selectedSphereIds={state.selectedSphereIds}
+              selectedVertices={state.selectedVertices}
+              selectedFaces={state.selectedFaces}
+              selectionCategory={state.selectionCategory}
+              onToggleSelectVertex={state.toggleSelectVertex}
+              onToggleSelectEdge={state.toggleSelectEdge}
+              onToggleSelectFace={state.toggleSelectFace}
+              onToggleSelectMesh={state.toggleSelectMesh}
+              onClearSelection={state.clearSelection}
+              onCreateGroupFromSelection={(name) => {
+                const id = state.createGroupFromSelection(name);
+                if (id) {
+                  setStatusMessage('Created group from selection (Ctrl+G)');
+                }
+                return id;
+              }}
+              isPerspective={state.isPerspective}
+              onTogglePerspective={state.togglePerspective}
             />
           </div>
 
@@ -624,9 +807,9 @@ export const App: React.FC = () => {
         {/* Right Property & Instructions Inspector */}
         <aside
           style={{
-            width: 220,
-            minWidth: 220,
-            maxWidth: 220,
+            width: 260,
+            minWidth: 260,
+            maxWidth: 260,
             backgroundColor: state.theme === 'dark' ? '#181a20' : '#ffffff',
             borderLeft: state.theme === 'dark' ? '1px solid #2d3139' : '1px solid #e5e7eb',
             display: 'flex',
@@ -644,6 +827,13 @@ export const App: React.FC = () => {
             selectedSphere={state.spheres.find((s) => s.id === state.selectedSphereId) || null}
             selectedVertex={state.selectedVertex}
             selectedFace={state.selectedFace}
+            selectedLineIds={state.selectedLineIds}
+            selectedArcIds={state.selectedArcIds}
+            selectedCylinderIds={state.selectedCylinderIds}
+            selectedSphereIds={state.selectedSphereIds}
+            selectedVertices={state.selectedVertices}
+            selectedFaces={state.selectedFaces}
+            selectionCategory={state.selectionCategory}
             totalLines={state.lines.length}
             totalArcs={state.arcs.length}
             totalCylinders={state.cylinders.length}
@@ -654,8 +844,14 @@ export const App: React.FC = () => {
             theme={state.theme}
             groups={state.groups}
             groupMode={state.groupMode}
+            selectedGroupId={state.selectedGroupId}
             onToggleGroupMode={state.setGroupMode}
             onCreateGroup={state.createGroup}
+            onCreateGroupFromSelection={state.createGroupFromSelection}
+            onSelectGroup={state.selectGroup}
+            onDeleteGroupAndMembers={state.deleteGroupAndMembers}
+            onRenameGroup={state.renameGroup}
+            onClearSelection={state.clearSelection}
             onUngroup={state.ungroup}
             onDeleteLine={(id) => {
               state.removeLine(id);

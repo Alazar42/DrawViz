@@ -100,6 +100,21 @@ export interface ProjectMetadata {
   mode: AppMode;
 }
 
+export interface ViewportProjectConfig {
+  projection: 'orthographic' | 'perspective';
+  theme?: AppTheme;
+  activeElevation?: number;
+  magnetSnapEnabled?: boolean;
+  snapModes?: {
+    vertex: boolean;
+    midpoint: boolean;
+    edge: boolean;
+    face: boolean;
+    grid: boolean;
+  };
+  solidShading?: boolean;
+}
+
 export interface DrawVizProject {
   version: string;
   metadata: ProjectMetadata;
@@ -110,6 +125,7 @@ export interface DrawVizProject {
   cylinders?: DrawingCylinder[];
   spheres?: DrawingSphere[];
   groups?: EntityGroup[];
+  viewportConfig?: ViewportProjectConfig;
   activeLessonId?: string;
 }
 

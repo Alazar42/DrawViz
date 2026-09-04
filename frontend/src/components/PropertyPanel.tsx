@@ -1,3 +1,4 @@
+import React, { useState } from 'react';
 import {
   DrawingLine,
   DrawingArc,
@@ -14,7 +15,24 @@ import {
 } from '../types/drawing';
 import { calculateLogicalLength, getLineDirection } from '../geometry/isometric';
 import { logicalToThree, threeToLogical, threeToLogicalNormal, getTwoPointArcPoints } from '../geometry/circle3d';
-import { Trash2, Sparkles, Box, ArrowUpCircle, Layers, Unlink, Link2, Circle, Plus, Minus } from 'lucide-react';
+import {
+  Trash2,
+  Sparkles,
+  Box,
+  ArrowUpCircle,
+  Layers,
+  Unlink,
+  Link2,
+  Circle,
+  Plus,
+  Minus,
+  Sliders,
+  FolderTree,
+  Edit2,
+  Check,
+  X,
+  Target,
+} from 'lucide-react';
 
 interface PropertyPanelProps {
   selectedLine: DrawingLine | null;
@@ -23,6 +41,13 @@ interface PropertyPanelProps {
   selectedSphere?: DrawingSphere | null;
   selectedVertex?: Point3D | null;
   selectedFace?: Face3D | null;
+  selectedLineIds?: string[];
+  selectedArcIds?: string[];
+  selectedCylinderIds?: string[];
+  selectedSphereIds?: string[];
+  selectedVertices?: Point3D[];
+  selectedFaces?: Face3D[];
+  selectionCategory?: 'vertex' | 'edge' | 'plane' | 'mesh' | null;
   totalLines: number;
   totalArcs?: number;
   totalCylinders?: number;
@@ -33,9 +58,15 @@ interface PropertyPanelProps {
   activeTool: ToolType;
   theme?: AppTheme;
   groups?: EntityGroup[];
+  selectedGroupId?: string | null;
   groupMode?: boolean;
   onToggleGroupMode?: (enabled: boolean) => void;
   onCreateGroup?: (name: string, type: GroupType, memberIds: string[]) => string;
+  onCreateGroupFromSelection?: (name?: string) => string | null;
+  onSelectGroup?: (groupId: string) => void;
+  onDeleteGroupAndMembers?: (groupId: string) => void;
+  onRenameGroup?: (groupId: string, newName: string) => void;
+  onClearSelection?: () => void;
   onUngroup?: (groupId: string) => void;
   onDeleteLine: (id: string) => void;
   onDeleteArc?: (id: string) => void;
@@ -55,6 +86,13 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   selectedSphere = null,
   selectedVertex = null,
   selectedFace = null,
+  selectedLineIds = [],
+  selectedArcIds = [],
+  selectedCylinderIds = [],
+  selectedSphereIds = [],
+  selectedVertices = [],
+  selectedFaces = [],
+  selectionCategory = null,
   totalLines,
   totalArcs = 0,
   totalCylinders = 0,
@@ -65,9 +103,15 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   activeTool,
   theme = 'light',
   groups = [],
+  selectedGroupId = null,
   groupMode = true,
   onToggleGroupMode,
   onCreateGroup,
+  onCreateGroupFromSelection,
+  onSelectGroup,
+  onDeleteGroupAndMembers,
+  onRenameGroup,
+  onClearSelection,
   onUngroup,
   onDeleteLine,
   onDeleteArc,
@@ -80,6 +124,19 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   onSketchOnFace,
 }) => {
   const isDark = theme === 'dark';
+  const [inspectorTab, setInspectorTab] = useState<'properties' | 'groups'>('properties');
+  const [groupFilter, setGroupFilter] = useState<'all' | 'mesh' | 'plane' | 'edge' | 'vertex'>('all');
+  const [customGroupName, setCustomGroupName] = useState('');
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
+
+  const multiCount =
+    (selectedLineIds?.length || 0) +
+    (selectedArcIds?.length || 0) +
+    (selectedCylinderIds?.length || 0) +
+    (selectedSphereIds?.length || 0) +
+    (selectedVertices?.length || 0) +
+    (selectedFaces?.length || 0);
 
   const renderGroupWidget = (
     currentGroupId?: string,
@@ -246,19 +303,624 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Inspector Tab Switcher */}
       <div
         style={{
-          fontSize: 10,
-          fontWeight: 700,
-          color: isDark ? '#94a3b8' : '#9ca3af',
-          letterSpacing: '0.06em',
-          textTransform: 'uppercase',
+          display: 'flex',
+          backgroundColor: isDark ? '#1f242d' : '#f1f5f9',
+          padding: 2,
+          borderRadius: 6,
+          gap: 2,
         }}
       >
-        Properties
+        <button
+          onClick={() => setInspectorTab('properties')}
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            padding: '6px 8px',
+            borderRadius: 5,
+            border: 'none',
+            backgroundColor: inspectorTab === 'properties' ? (isDark ? '#2d3340' : '#ffffff') : 'transparent',
+            color: inspectorTab === 'properties' ? (isDark ? '#ffffff' : '#0f172a') : (isDark ? '#94a3b8' : '#64748b'),
+            fontSize: 11,
+            fontWeight: inspectorTab === 'properties' ? 600 : 500,
+            cursor: 'pointer',
+            boxShadow: inspectorTab === 'properties' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <Sliders size={12} />
+          <span>Properties</span>
+        </button>
+
+        <button
+          onClick={() => setInspectorTab('groups')}
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            padding: '6px 8px',
+            borderRadius: 5,
+            border: 'none',
+            backgroundColor: inspectorTab === 'groups' ? (isDark ? '#2d3340' : '#ffffff') : 'transparent',
+            color: inspectorTab === 'groups' ? (isDark ? '#ffffff' : '#0f172a') : (isDark ? '#94a3b8' : '#64748b'),
+            fontSize: 11,
+            fontWeight: inspectorTab === 'groups' ? 600 : 500,
+            cursor: 'pointer',
+            boxShadow: inspectorTab === 'groups' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <FolderTree size={12} />
+          <span>Groups</span>
+          <span
+            style={{
+              padding: '1px 5px',
+              borderRadius: 10,
+              fontSize: 9,
+              fontWeight: 700,
+              backgroundColor: inspectorTab === 'groups' ? (isDark ? '#4f46e5' : '#e0e7ff') : (isDark ? '#2d3340' : '#e2e8f0'),
+              color: inspectorTab === 'groups' ? (isDark ? '#ffffff' : '#4338ca') : (isDark ? '#94a3b8' : '#64748b'),
+            }}
+          >
+            {groups.length}
+          </span>
+        </button>
       </div>
 
-      {selectedLine && lineDetails ? (
+      {inspectorTab === 'groups' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* Quick Grouping Banner if multiple items selected */}
+          {multiCount > 0 && (
+            <div
+              style={{
+                padding: '10px 12px',
+                backgroundColor: isDark ? '#1e2430' : '#eff6ff',
+                border: isDark ? '1px solid #3b82f6' : '1px solid #93c5fd',
+                borderRadius: 6,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: isDark ? '#93c5fd' : '#1d4ed8' }}>
+                  Selection: {multiCount} {selectionCategory || 'items'}
+                </span>
+                <span
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    padding: '2px 6px',
+                    borderRadius: 3,
+                    backgroundColor: isDark ? '#2563eb' : '#bfdbfe',
+                    color: isDark ? '#ffffff' : '#1e40af',
+                  }}
+                >
+                  {selectionCategory || 'mixed'}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  type="text"
+                  placeholder={`Name (e.g. ${selectionCategory ? selectionCategory.charAt(0).toUpperCase() + selectionCategory.slice(1) + ' Group' : 'Group'})`}
+                  value={customGroupName}
+                  onChange={(e) => setCustomGroupName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      onCreateGroupFromSelection?.(customGroupName);
+                      setCustomGroupName('');
+                    }
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '4px 8px',
+                    fontSize: 11,
+                    backgroundColor: isDark ? '#111827' : '#ffffff',
+                    border: isDark ? '1px solid #374151' : '1px solid #cbd5e1',
+                    borderRadius: 4,
+                    color: isDark ? '#f8fafc' : '#0f172a',
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    onCreateGroupFromSelection?.(customGroupName);
+                    setCustomGroupName('');
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '4px 10px',
+                    backgroundColor: '#4f46e5',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: 4,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                  title="Group selected elements together (Ctrl+G)"
+                >
+                  <Link2 size={11} />
+                  <span>Group</span>
+                </button>
+                <button
+                  onClick={() => onClearSelection?.()}
+                  style={{
+                    padding: '4px 6px',
+                    backgroundColor: 'transparent',
+                    color: isDark ? '#94a3b8' : '#64748b',
+                    border: isDark ? '1px solid #374151' : '1px solid #cbd5e1',
+                    borderRadius: 4,
+                    fontSize: 10,
+                    cursor: 'pointer',
+                  }}
+                  title="Clear current selection"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Group Transform Behavior Toggle */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '6px 8px',
+              backgroundColor: isDark ? '#1a1d24' : '#f8fafc',
+              borderRadius: 5,
+              border: isDark ? '1px solid #2e3542' : '1px solid #e2e8f0',
+            }}
+          >
+            <span style={{ fontSize: 10, color: isDark ? '#94a3b8' : '#64748b', fontWeight: 500 }}>
+              Group Transform Mode
+            </span>
+            <button
+              onClick={() => onToggleGroupMode?.(!groupMode)}
+              style={{
+                padding: '3px 8px',
+                borderRadius: 4,
+                border: 'none',
+                backgroundColor: groupMode ? '#4f46e5' : isDark ? '#334155' : '#cbd5e1',
+                color: '#ffffff',
+                fontSize: 9,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+              title="When ON, transforming any member of a group moves/rotates/scales the entire group"
+            >
+              {groupMode ? 'ALL AS UNIT' : 'SINGLE'}
+            </button>
+          </div>
+
+          {/* Category Filter Pills */}
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {(['all', 'mesh', 'plane', 'edge', 'vertex'] as const).map((cat) => {
+              const count = cat === 'all' ? groups.length : groups.filter((g) => g.type === cat).length;
+              return (
+                <button
+                  key={cat}
+                  onClick={() => setGroupFilter(cat)}
+                  style={{
+                    padding: '3px 7px',
+                    borderRadius: 4,
+                    border: 'none',
+                    fontSize: 9,
+                    fontWeight: groupFilter === cat ? 700 : 500,
+                    backgroundColor: groupFilter === cat ? (isDark ? '#4f46e5' : '#e0e7ff') : (isDark ? '#232731' : '#f1f5f9'),
+                    color: groupFilter === cat ? (isDark ? '#ffffff' : '#4338ca') : (isDark ? '#94a3b8' : '#64748b'),
+                    cursor: 'pointer',
+                    textTransform: 'capitalize',
+                  }}
+                >
+                  {cat} ({count})
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Groups List */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {groups
+              .filter((g) => groupFilter === 'all' || g.type === groupFilter)
+              .map((group) => {
+                const isEditing = editingGroupId === group.id;
+                const isSelected = selectedGroupId === group.id;
+                const typeColors = {
+                  mesh: { bg: isDark ? '#1e3a8a' : '#dbeafe', text: isDark ? '#93c5fd' : '#1d4ed8' },
+                  plane: { bg: isDark ? '#064e3b' : '#d1fae5', text: isDark ? '#6ee7b7' : '#047857' },
+                  edge: { bg: isDark ? '#312e81' : '#ede9fe', text: isDark ? '#c7d2fe' : '#6d28d9' },
+                  vertex: { bg: isDark ? '#78350f' : '#fef3c7', text: isDark ? '#fde68a' : '#b45309' },
+                }[group.type] || { bg: isDark ? '#27272a' : '#f4f4f5', text: isDark ? '#a1a1aa' : '#52525b' };
+
+                return (
+                  <div
+                    key={group.id}
+                    style={{
+                      padding: '8px 10px',
+                      backgroundColor: isSelected
+                        ? (isDark ? 'rgba(79, 70, 229, 0.22)' : '#eef2ff')
+                        : (isDark ? '#1a1d24' : '#ffffff'),
+                      borderRadius: 6,
+                      border: isSelected
+                        ? '1px solid #6366f1'
+                        : (isDark ? '1px solid #2e3542' : '1px solid #e2e8f0'),
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                      transition: 'border-color 0.15s ease',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+                        <Layers size={13} style={{ color: isSelected ? '#818cf8' : (isDark ? '#a5b4fc' : '#4f46e5'), flexShrink: 0 }} />
+                        <span
+                          style={{
+                            fontSize: 9,
+                            padding: '1px 5px',
+                            borderRadius: 3,
+                            fontWeight: 700,
+                            textTransform: 'uppercase',
+                            backgroundColor: typeColors.bg,
+                            color: typeColors.text,
+                          }}
+                        >
+                          {group.type}
+                        </span>
+
+                        {isEditing ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
+                            <input
+                              type="text"
+                              value={editingName}
+                              onChange={(e) => setEditingName(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  onRenameGroup?.(group.id, editingName);
+                                  setEditingGroupId(null);
+                                } else if (e.key === 'Escape') {
+                                  setEditingGroupId(null);
+                                }
+                              }}
+                              autoFocus
+                              style={{
+                                flex: 1,
+                                fontSize: 10,
+                                padding: '2px 4px',
+                                backgroundColor: isDark ? '#0f172a' : '#ffffff',
+                                border: '1px solid #4f46e5',
+                                borderRadius: 3,
+                                color: isDark ? '#ffffff' : '#000000',
+                                outline: 'none',
+                              }}
+                            />
+                            <button
+                              onClick={() => {
+                                onRenameGroup?.(group.id, editingName);
+                                setEditingGroupId(null);
+                              }}
+                              style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 2, color: '#10b981' }}
+                            >
+                              <Check size={11} />
+                            </button>
+                            <button
+                              onClick={() => setEditingGroupId(null)}
+                              style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 2, color: '#ef4444' }}
+                            >
+                              <X size={11} />
+                            </button>
+                          </div>
+                        ) : (
+                          <span
+                            onDoubleClick={() => {
+                              setEditingGroupId(group.id);
+                              setEditingName(group.name);
+                            }}
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: isDark ? '#f1f5f9' : '#0f172a',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {group.name}
+                          </span>
+                        )}
+                      </div>
+
+                      {!isEditing && (
+                        <button
+                          onClick={() => {
+                            setEditingGroupId(group.id);
+                            setEditingName(group.name);
+                          }}
+                          style={{
+                            border: 'none',
+                            background: 'transparent',
+                            cursor: 'pointer',
+                            color: isDark ? '#64748b' : '#94a3b8',
+                            padding: 2,
+                          }}
+                          title="Rename Group"
+                        >
+                          <Edit2 size={10} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: isDark ? '#94a3b8' : '#64748b' }}>
+                      <span>{group.memberIds.length} members</span>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
+                      <button
+                        onClick={() => onSelectGroup?.(group.id)}
+                        style={{
+                          flex: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 4,
+                          padding: '4px 6px',
+                          borderRadius: 4,
+                          border: isSelected ? '1px solid #6366f1' : (isDark ? '1px solid #374151' : '1px solid #cbd5e1'),
+                          backgroundColor: isSelected ? '#4f46e5' : (isDark ? '#232731' : '#f8fafc'),
+                          color: isSelected ? '#ffffff' : (isDark ? '#93c5fd' : '#2563eb'),
+                          fontSize: 9,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                        title="Select this group in 3D viewport"
+                      >
+                        <Target size={10} />
+                        <span>{isSelected ? 'Selected' : 'Select'}</span>
+                      </button>
+                      <button
+                        onClick={() => onUngroup?.(group.id)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '4px 6px',
+                          borderRadius: 4,
+                          border: isDark ? '1px solid #374151' : '1px solid #cbd5e1',
+                          backgroundColor: 'transparent',
+                          color: isDark ? '#cbd5e1' : '#475569',
+                          fontSize: 9,
+                          fontWeight: 500,
+                          cursor: 'pointer',
+                        }}
+                        title="Dissolve group into individual items"
+                      >
+                        <Unlink size={10} />
+                        <span>Ungroup</span>
+                      </button>
+                      <button
+                        onClick={() => onDeleteGroupAndMembers?.(group.id)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          padding: '4px 6px',
+                          borderRadius: 4,
+                          border: isDark ? '1px solid #7f1d1d' : '1px solid #fecaca',
+                          backgroundColor: 'transparent',
+                          color: isDark ? '#f87171' : '#dc2626',
+                          fontSize: 9,
+                          fontWeight: 500,
+                          cursor: 'pointer',
+                        }}
+                        title="Delete group and all its member entities"
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+            {groups.filter((g) => groupFilter === 'all' || g.type === groupFilter).length === 0 && (
+              <div
+                style={{
+                  padding: '16px 12px',
+                  textAlign: 'center',
+                  backgroundColor: isDark ? '#181b22' : '#f8fafc',
+                  borderRadius: 6,
+                  border: isDark ? '1px dashed #2d3340' : '1px dashed #cbd5e1',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <FolderTree size={22} style={{ color: isDark ? '#4b5563' : '#9ca3af' }} />
+                <span style={{ fontSize: 11, fontWeight: 600, color: isDark ? '#cbd5e1' : '#475569' }}>
+                  No groups {groupFilter !== 'all' ? `in ${groupFilter}` : 'created yet'}
+                </span>
+                <span style={{ fontSize: 10, color: isDark ? '#6b7280' : '#9ca3af', lineHeight: 1.4 }}>
+                  Select multiple items of the same type using Shift+Click, then press Ctrl+G or use the Group button.
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Active Selected Group Info Card in Properties tab */}
+          {selectedGroupId && (() => {
+            const activeGroup = groups.find((g) => g.id === selectedGroupId);
+            if (!activeGroup) return null;
+            return (
+              <div
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: isDark ? '#1e2430' : '#eff6ff',
+                  border: isDark ? '1px solid #4f46e5' : '1px solid #93c5fd',
+                  borderRadius: 6,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Layers size={14} style={{ color: isDark ? '#a5b4fc' : '#4f46e5' }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: isDark ? '#f8fafc' : '#0f172a' }}>
+                      {activeGroup.name}
+                    </span>
+                  </div>
+                  <span
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      padding: '2px 6px',
+                      borderRadius: 3,
+                      backgroundColor: isDark ? '#312e81' : '#e0e7ff',
+                      color: isDark ? '#c7d2fe' : '#4338ca',
+                    }}
+                  >
+                    {activeGroup.type}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: isDark ? '#94a3b8' : '#64748b' }}>
+                  <span>Group Members</span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{activeGroup.memberIds.length} items</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <button
+                    onClick={() => onToggleGroupMode?.(!groupMode)}
+                    style={{
+                      flex: 1,
+                      padding: '5px 8px',
+                      borderRadius: 4,
+                      border: 'none',
+                      backgroundColor: groupMode ? '#4f46e5' : (isDark ? '#334155' : '#94a3b8'),
+                      color: '#ffffff',
+                      fontSize: 10,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                    title="Toggle moving all members together vs single item"
+                  >
+                    {groupMode ? 'Group Move: ON' : 'Single Move'}
+                  </button>
+                  <button
+                    onClick={() => onUngroup?.(activeGroup.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '5px 8px',
+                      borderRadius: 4,
+                      border: isDark ? '1px solid #475569' : '1px solid #cbd5e1',
+                      backgroundColor: 'transparent',
+                      color: isDark ? '#cbd5e1' : '#475569',
+                      fontSize: 10,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                    }}
+                    title="Dissolve group into individual items"
+                  >
+                    <Unlink size={11} />
+                    <span>Ungroup</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Multi-Selection Info Card in Properties tab */}
+          {multiCount > 1 && !selectedGroupId && (
+            <div
+              style={{
+                padding: '8px 10px',
+                backgroundColor: isDark ? '#1e2430' : '#eff6ff',
+                border: isDark ? '1px solid #3b82f6' : '1px solid #93c5fd',
+                borderRadius: 6,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: isDark ? '#93c5fd' : '#1d4ed8' }}>
+                  Multi-Selection: {multiCount} items
+                </span>
+                <span
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                    backgroundColor: isDark ? '#2563eb' : '#bfdbfe',
+                    color: isDark ? '#ffffff' : '#1e40af',
+                  }}
+                >
+                  {selectionCategory || 'mixed'}
+                </span>
+              </div>
+              <div style={{ fontSize: 10, color: isDark ? '#94a3b8' : '#64748b' }}>
+                Hold Shift to add or toggle more elements of the same type.
+              </div>
+              <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+                <button
+                  onClick={() => onCreateGroupFromSelection?.()}
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 4,
+                    padding: '5px 8px',
+                    backgroundColor: '#4f46e5',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: 4,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Link2 size={11} />
+                  <span>Group Selected (Ctrl+G)</span>
+                </button>
+                <button
+                  onClick={() => setInspectorTab('groups')}
+                  style={{
+                    padding: '5px 8px',
+                    backgroundColor: 'transparent',
+                    color: isDark ? '#93c5fd' : '#2563eb',
+                    border: isDark ? '1px solid #3b82f6' : '1px solid #93c5fd',
+                    borderRadius: 4,
+                    fontSize: 10,
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Manage Groups
+                </button>
+              </div>
+            </div>
+          )}
+
+          {selectedLine && lineDetails ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', color: isDark ? '#e2e8f0' : '#374151' }}>
             <span style={{ color: isDark ? '#94a3b8' : '#6b7280' }}>Tool</span>
@@ -921,6 +1583,8 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
           >
             Use Blender modes 1 (Vertex), 2 (Edge), 3 (Face) to inspect and sketch on 3D geometry.
           </div>
+        </div>
+      )}
         </div>
       )}
     </div>
