@@ -23,7 +23,8 @@ interface TopBarProps {
   onNew: () => void;
   onOpen: () => void;
   onSave: () => void;
-  onExportSvg: () => void;
+  onExportSvg?: () => void;
+  onExport?: () => void;
   onOpenSettings: () => void;
   theme?: AppTheme;
   onToggleTheme?: () => void;
@@ -40,6 +41,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpen,
   onSave,
   onExportSvg,
+  onExport,
   onOpenSettings,
   theme = 'light',
   onToggleTheme,
@@ -186,12 +188,22 @@ export const TopBar: React.FC<TopBarProps> = ({
           <Save size={15} />
         </button>
         <button
-          onClick={onExportSvg}
-          title="Export SVG"
+          onClick={onExport || onExportSvg}
+          title="Export Technical Drawing (PDF / SVG) (Ctrl+E)"
           className="top-btn"
-          style={{ color: isDark ? '#cbd5e1' : '#4b5563' }}
+          style={{
+            color: isDark ? '#38bdf8' : '#0284c7',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '3px 8px',
+            borderRadius: 4,
+            border: isDark ? '1px solid rgba(56, 189, 248, 0.3)' : '1px solid rgba(2, 132, 199, 0.3)',
+            backgroundColor: isDark ? 'rgba(56, 189, 248, 0.08)' : 'rgba(2, 132, 199, 0.08)',
+          }}
         >
-          <Download size={15} />
+          <Download size={14} />
+          <span style={{ fontSize: 11, fontWeight: 600 }}>Export</span>
         </button>
 
         <div style={{ width: 1, height: 16, backgroundColor: isDark ? '#334155' : '#e5e7eb', margin: '0 4px' }} />

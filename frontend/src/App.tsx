@@ -7,6 +7,7 @@ import { InstructionsPanel } from './components/InstructionsPanel';
 import { OrthoPanel } from './components/OrthoPanel';
 import { StatusBar } from './components/StatusBar';
 import { SettingsModal } from './components/SettingsModal';
+import { ExportModal } from './components/ExportModal';
 import { IsometricCanvas } from './canvas/IsometricCanvas';
 import { Three3DCanvas } from './canvas/Three3DCanvas';
 import { AxisIndicator } from './canvas/AxisIndicator';
@@ -16,6 +17,7 @@ import { DrawVizProject, DrawingCylinder, DrawingSphere, Point3D } from './types
 export const App: React.FC = () => {
   const state = useDrawingState();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState('Ready');
   const [isToolShelfOpen, setIsToolShelfOpen] = useState(false);
 
@@ -51,6 +53,13 @@ export const App: React.FC = () => {
       if (modKey && e.key.toLowerCase() === 's') {
         e.preventDefault();
         handleSaveProject();
+        return;
+      }
+
+      if (modKey && e.key.toLowerCase() === 'e') {
+        e.preventDefault();
+        setIsExportModalOpen(true);
+        setStatusMessage('Opened Technical Drawing Export (Ctrl+E)');
         return;
       }
 
@@ -487,7 +496,8 @@ export const App: React.FC = () => {
         onNew={handleNewDrawing}
         onOpen={handleOpenProject}
         onSave={handleSaveProject}
-        onExportSvg={handleExportSvg}
+        onExportSvg={() => setIsExportModalOpen(true)}
+        onExport={() => setIsExportModalOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         theme={state.theme}
         onToggleTheme={state.toggleTheme}
@@ -952,6 +962,18 @@ export const App: React.FC = () => {
         onUpdateGridSettings={state.setGridSettings}
         theme={state.theme}
         onSetTheme={state.setTheme}
+      />
+
+      {/* Technical Drawing Export Modal (PDF & SVG) */}
+      <ExportModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        lines={state.lines}
+        arcs={state.arcs}
+        cylinders={state.cylinders}
+        spheres={state.spheres}
+        faceColors={state.faceColors}
+        theme={state.theme}
       />
     </div>
   );
