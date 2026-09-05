@@ -129,62 +129,70 @@ export function generateTechnicalDrawingSvg(
   const tbw = titleBlockBox.width;
   const tbh = titleBlockBox.height;
 
-  const projSymbolWidth = 32;
+  const c0 = tbx;
+  const c1 = tbx + 40;
+  const c2 = tbx + 80;
+  const c3 = tbx + 120;
+  const c4 = tbx + tbw;
+
   const symbolSvg = config.showProjectionSymbol
-    ? generateProjectionSymbolSvg(tbx + tbw - projSymbolWidth, tby + 16, projSymbolWidth, tbh - 16, config.projection)
+    ? generateProjectionSymbolSvg(c3, tby + 5, c4 - c3, 20, config.projection)
     : '';
 
   const titleBlockSvg = `
     <g id="title-block" font-family="'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
       <!-- Title Block Outer Frame -->
-      <rect x="${tbx}" y="${tby}" width="${tbw}" height="${tbh}" fill="#ffffff" stroke="#000000" stroke-width="0.6" />
+      <rect x="${tbx}" y="${tby}" width="${tbw}" height="${tbh}" fill="#ffffff" stroke="#000000" stroke-width="0.7" />
 
-      <!-- Horizontal Divider 1 (Top Bar: Company / Institution) -->
-      <line x1="${tbx}" y1="${tby + 10}" x2="${tbx + tbw}" y2="${tby + 10}" stroke="#000000" stroke-width="0.35" />
-      <!-- Horizontal Divider 2 (Main Title Row) -->
-      <line x1="${tbx}" y1="${tby + 24}" x2="${tbx + tbw}" y2="${tby + 24}" stroke="#000000" stroke-width="0.35" />
-      <!-- Horizontal Divider 3 (Metadata Row) -->
-      <line x1="${tbx}" y1="${tby + 33}" x2="${tbx + tbw}" y2="${tby + 33}" stroke="#000000" stroke-width="0.35" />
+      <!-- Horizontal Dividers -->
+      <line x1="${c0}" y1="${tby + 11}" x2="${c3}" y2="${tby + 11}" stroke="#000000" stroke-width="0.35" />
+      <line x1="${c0}" y1="${tby + 25}" x2="${c4}" y2="${tby + 25}" stroke="#000000" stroke-width="0.35" />
+      <line x1="${c0}" y1="${tby + 35.5}" x2="${c4}" y2="${tby + 35.5}" stroke="#000000" stroke-width="0.35" />
 
-      <!-- Company Name -->
-      <text x="${tbx + 4}" y="${tby + 4}" font-size="2.2" font-weight="600" fill="#64748b">ORGANIZATION / COMPANY</text>
-      <text x="${tbx + 4}" y="${tby + 8.2}" font-size="3.5" font-weight="700" fill="#111827">${escapeXml(tb.company || 'DrawViz Technical Studio')}</text>
+      <!-- Vertical Dividers -->
+      <line x1="${c1}" y1="${tby + 25}" x2="${c1}" y2="${tby + tbh}" stroke="#000000" stroke-width="0.35" />
+      <line x1="${c2}" y1="${tby + 25}" x2="${c2}" y2="${tby + tbh}" stroke="#000000" stroke-width="0.35" />
+      <line x1="${c3}" y1="${tby}" x2="${c3}" y2="${tby + tbh}" stroke="#000000" stroke-width="0.35" />
 
-      <!-- Drawing Title -->
-      <text x="${tbx + 4}" y="${tby + 14}" font-size="2.2" font-weight="600" fill="#64748b">DRAWING TITLE</text>
-      <text x="${tbx + 4}" y="${tby + 20.5}" font-size="4.5" font-weight="800" fill="#111827">${escapeXml(tb.title || 'TECHNICAL DRAWING')}</text>
+      <!-- Row 1: Company / Organization -->
+      <text x="${c0 + 3}" y="${tby + 3.8}" font-size="1.8" font-weight="600" fill="#64748b">ORGANIZATION / COMPANY</text>
+      <text x="${c0 + 3}" y="${tby + 8.2}" font-size="3.4" font-weight="700" fill="#111827">${escapeXml(tb.company || 'DrawViz Technical Studio')}</text>
 
-      <!-- Vertical Dividers inside Title Block -->
-      <line x1="${tbx + tbw * 0.36}" y1="${tby + 24}" x2="${tbx + tbw * 0.36}" y2="${tby + tbh}" stroke="#000000" stroke-width="0.3" />
-      <line x1="${tbx + tbw * 0.65}" y1="${tby + 24}" x2="${tbx + tbw * 0.65}" y2="${tby + tbh}" stroke="#000000" stroke-width="0.3" />
-      <line x1="${tbx + tbw - projSymbolWidth}" y1="${tby + 10}" x2="${tbx + tbw - projSymbolWidth}" y2="${tby + tbh}" stroke="#000000" stroke-width="0.3" />
+      <!-- Row 2: Drawing Title -->
+      <text x="${c0 + 3}" y="${tby + 14.5}" font-size="1.8" font-weight="600" fill="#64748b">DRAWING TITLE</text>
+      <text x="${c0 + 3}" y="${tby + 20.8}" font-size="4.2" font-weight="800" fill="#111827">${escapeXml(tb.title || 'TECHNICAL DRAWING')}</text>
 
-      <!-- DWG NO & REV -->
-      <text x="${tbx + 4}" y="${tby + 27.5}" font-size="2.0" font-weight="600" fill="#64748b">DRAWING NO.</text>
-      <text x="${tbx + 4}" y="${tby + 31.5}" font-size="3.0" font-weight="700" fill="#111827">${escapeXml(tb.drawingNumber || 'DWG-001')}</text>
-
-      <text x="${tbx + 4}" y="${tby + 36.5}" font-size="2.0" font-weight="600" fill="#64748b">REVISION</text>
-      <text x="${tbx + 4}" y="${tby + 40.2}" font-size="2.8" font-weight="700" fill="#111827">${escapeXml(tb.revision || 'REV A')}</text>
-
-      <!-- DRAWN BY & DATE -->
-      <text x="${tbx + tbw * 0.36 + 3}" y="${tby + 27.5}" font-size="2.0" font-weight="600" fill="#64748b">DRAWN BY</text>
-      <text x="${tbx + tbw * 0.36 + 3}" y="${tby + 31.5}" font-size="2.8" font-weight="600" fill="#111827">${escapeXml(tb.drawnBy || 'ENGINEER')}</text>
-
-      <text x="${tbx + tbw * 0.36 + 3}" y="${tby + 36.5}" font-size="2.0" font-weight="600" fill="#64748b">CHECKED BY</text>
-      <text x="${tbx + tbw * 0.36 + 3}" y="${tby + 40.2}" font-size="2.8" font-weight="600" fill="#111827">${escapeXml(tb.checkedBy || 'APPROVED')}</text>
-
-      <!-- SCALE & UNITS -->
-      <text x="${tbx + tbw * 0.65 + 3}" y="${tby + 27.5}" font-size="2.0" font-weight="600" fill="#64748b">SCALE</text>
-      <text x="${tbx + tbw * 0.65 + 3}" y="${tby + 31.5}" font-size="2.8" font-weight="700" fill="#111827">${escapeXml(tb.scaleText || (config.scaleMode === 'auto' ? 'NTS' : config.scaleMode))}</text>
-
-      <text x="${tbx + tbw * 0.65 + 3}" y="${tby + 36.5}" font-size="2.0" font-weight="600" fill="#64748b">DATE / UNITS</text>
-      <text x="${tbx + tbw * 0.65 + 3}" y="${tby + 40.2}" font-size="2.6" font-weight="600" fill="#111827">${escapeXml(tb.date || new Date().toISOString().slice(0, 10))} (${escapeXml(tb.units || 'mm')})</text>
-
-      <!-- Projection Header & Symbol -->
-      <text x="${tbx + tbw - projSymbolWidth + 3}" y="${tby + 14}" font-size="2.0" font-weight="600" fill="#64748b">
-        ${config.projection === 'third_angle' ? '3RD ANGLE PROJECTION' : '1ST ANGLE PROJECTION'}
+      <!-- Projection Box (Top-Right) -->
+      <text x="${c3 + 3}" y="${tby + 4.5}" font-size="1.8" font-weight="700" fill="#64748b">
+        ${config.projection === 'third_angle' ? '3RD ANGLE PROJ.' : '1ST ANGLE PROJ.'}
       </text>
       ${symbolSvg}
+
+      <!-- Row 3: DWG NO / DRAWN BY / SCALE / UNITS -->
+      <text x="${c0 + 3}" y="${tby + 28.5}" font-size="1.8" font-weight="600" fill="#64748b">DRAWING NO.</text>
+      <text x="${c0 + 3}" y="${tby + 32.8}" font-size="2.7" font-weight="700" fill="#111827">${escapeXml(tb.drawingNumber || 'DWG-1001')}</text>
+
+      <text x="${c1 + 3}" y="${tby + 28.5}" font-size="1.8" font-weight="600" fill="#64748b">DRAWN BY</text>
+      <text x="${c1 + 3}" y="${tby + 32.8}" font-size="2.7" font-weight="600" fill="#111827">${escapeXml(tb.drawnBy || 'ENGINEER')}</text>
+
+      <text x="${c2 + 3}" y="${tby + 28.5}" font-size="1.8" font-weight="600" fill="#64748b">SCALE</text>
+      <text x="${c2 + 3}" y="${tby + 32.8}" font-size="2.7" font-weight="700" fill="#111827">${escapeXml(tb.scaleText || (config.scaleMode === 'auto' ? 'NTS (FIT)' : config.scaleMode))}</text>
+
+      <text x="${c3 + 3}" y="${tby + 28.5}" font-size="1.8" font-weight="600" fill="#64748b">UNITS</text>
+      <text x="${c3 + 3}" y="${tby + 32.8}" font-size="2.7" font-weight="700" fill="#111827">${escapeXml(tb.units || 'mm')}</text>
+
+      <!-- Row 4: REVISION / CHECKED BY / SHEET / DATE -->
+      <text x="${c0 + 3}" y="${tby + 39.0}" font-size="1.8" font-weight="600" fill="#64748b">REVISION</text>
+      <text x="${c0 + 3}" y="${tby + 43.0}" font-size="2.7" font-weight="700" fill="#111827">${escapeXml(tb.revision || 'REV A')}</text>
+
+      <text x="${c1 + 3}" y="${tby + 39.0}" font-size="1.8" font-weight="600" fill="#64748b">CHECKED BY</text>
+      <text x="${c1 + 3}" y="${tby + 43.0}" font-size="2.7" font-weight="600" fill="#111827">${escapeXml(tb.checkedBy || 'APPROVED')}</text>
+
+      <text x="${c2 + 3}" y="${tby + 39.0}" font-size="1.8" font-weight="600" fill="#64748b">SHEET</text>
+      <text x="${c2 + 3}" y="${tby + 43.0}" font-size="2.7" font-weight="700" fill="#111827">1 OF 1</text>
+
+      <text x="${c3 + 3}" y="${tby + 39.0}" font-size="1.8" font-weight="600" fill="#64748b">DATE</text>
+      <text x="${c3 + 3}" y="${tby + 43.0}" font-size="2.7" font-weight="600" fill="#111827">${escapeXml(tb.date || new Date().toISOString().slice(0, 10))}</text>
     </g>
   `;
 

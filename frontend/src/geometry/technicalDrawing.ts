@@ -48,7 +48,7 @@ export interface TechnicalSheetConfig {
   projection: ProjectionStandard;
   layoutMode: ViewLayoutMode;
   singleViewType: SingleViewType;
-  scaleMode: 'auto' | '1:1' | '1:2' | '2:1' | '1:5' | '5:1';
+  scaleMode: 'auto' | '1:10' | '1:5' | '1:2' | '1:1' | '2:1' | '5:1' | '10:1';
   overallScaleMultiplier?: number;
   shadingStyle: ShadingStyle;
   showHiddenLines: boolean;
@@ -471,12 +471,14 @@ export function generateSheetLayout(
     height: paper.height - margin.top - margin.bottom,
   };
 
-  // Standard ISO 7200 Title Block (width: 150mm, height: 40mm in bottom-right corner)
+  // Standard ISO 7200 Title Block (width: 160mm, height: 46mm in bottom-right corner)
+  const tbW = Math.min(160, border.width);
+  const tbH = 46;
   const titleBlockBox = {
-    width: Math.min(150, border.width * 0.55),
-    height: 40,
-    x: border.x + border.width - Math.min(150, border.width * 0.55),
-    y: border.y + border.height - 40,
+    width: tbW,
+    height: tbH,
+    x: border.x + border.width - tbW,
+    y: border.y + border.height - tbH,
   };
 
   // Reference Zones (ISO 5457: A, B, C, D vertically; 1, 2, 3, 4, 5, 6 horizontally)
@@ -501,11 +503,13 @@ export function generateSheetLayout(
   // Parse or determine scale factor
   const getExplicitScale = (): number | null => {
     switch (config.scaleMode) {
-      case '1:1': return 1.0;
-      case '1:2': return 0.5;
-      case '2:1': return 2.0;
+      case '1:10': return 0.1;
       case '1:5': return 0.2;
+      case '1:2': return 0.5;
+      case '1:1': return 1.0;
+      case '2:1': return 2.0;
       case '5:1': return 5.0;
+      case '10:1': return 10.0;
       default: return null;
     }
   };
@@ -521,7 +525,7 @@ export function generateSheetLayout(
     const availW = border.width - 24;
     const availH = border.height - titleBlockBox.height - 20;
     const autoScale = Math.min(availW / (bounds.width || 1), availH / (bounds.height || 1)) * 0.75;
-    const baseScale = (explicitScale ?? Math.max(0.05, Math.min(10, autoScale))) * scaleMultiplier;
+    const baseScale = (explicitScale ?? autoScale) * scaleMultiplier;
 
     // Check custom user placement
     const custom = config.customPlacements?.['view-single'] || config.customPlacements?.[viewType];
@@ -595,21 +599,21 @@ export function generateSheetLayout(
       // Isometric View: x=205, y=75 (open top-right space!)
       viewSpecs = [
         { id: 'top', title: 'TOP PLAN', defaultCenter: { x: border.x + 48, y: border.y + 48 }, targetSize: 45 },
-        { id: 'front', title: 'FRONT ELEVATION', defaultCenter: { x: border.x + 48, y: border.y + 130 }, targetSize: 45 },
-        { id: 'right', title: 'RIGHT SIDE ELEVATION', defaultCenter: { x: border.x + 98, y: border.y + 130 }, targetSize: 45 },
-        { id: 'iso', title: 'ISOMETRIC 3D VIEW', defaultCenter: { x: border.x + 190, y: border.y + 68 }, targetSize: 65 },
+        { id: 'front', title: 'FRONT ELEVATION', defaultCenter: { x: border.x + 48, y: border.y + 128 }, targetSize: 45 },
+        { id: 'right', title: 'RIGHT SIDE ELEVATION', defaultCenter: { x: border.x + 94, y: border.y + 128 }, targetSize: 45 },
+        { id: 'iso', title: 'ISOMETRIC 3D VIEW', defaultCenter: { x: border.x + 195, y: border.y + 65 }, targetSize: 65 },
       ];
     } else {
       // First Angle (ISO / European standard):
-      // Front Elevation: x=65, y=55
-      // Right Side Elevation: x=112, y=55
-      // Top Plan: x=65, y=140
-      // Isometric View: x=205, y=75
+      // Front Elevation: top-left
+      // Right Side Elevation: top-center
+      // Top Plan: bottom-left
+      // Isometric View: top-right
       viewSpecs = [
         { id: 'front', title: 'FRONT ELEVATION', defaultCenter: { x: border.x + 48, y: border.y + 48 }, targetSize: 45 },
-        { id: 'right', title: 'RIGHT SIDE ELEVATION', defaultCenter: { x: border.x + 98, y: border.y + 48 }, targetSize: 45 },
-        { id: 'top', title: 'TOP PLAN', defaultCenter: { x: border.x + 48, y: border.y + 130 }, targetSize: 45 },
-        { id: 'iso', title: 'ISOMETRIC 3D VIEW', defaultCenter: { x: border.x + 190, y: border.y + 68 }, targetSize: 65 },
+        { id: 'right', title: 'RIGHT SIDE ELEVATION', defaultCenter: { x: border.x + 94, y: border.y + 48 }, targetSize: 45 },
+        { id: 'top', title: 'TOP PLAN', defaultCenter: { x: border.x + 48, y: border.y + 128 }, targetSize: 45 },
+        { id: 'iso', title: 'ISOMETRIC 3D VIEW', defaultCenter: { x: border.x + 195, y: border.y + 65 }, targetSize: 65 },
       ];
     }
 
@@ -629,11 +633,11 @@ export function generateSheetLayout(
     );
 
     const explicitScale = getExplicitScale();
-    const defaultOrthoScale = (42 / maxOrthoDim); // 42mm safe target box
-    const baseOrthoScale = (explicitScale ?? Math.max(0.05, Math.min(10, defaultOrthoScale))) * scaleMultiplier;
+    const defaultOrthoScale = (50 / maxOrthoDim);
+    const baseOrthoScale = (explicitScale ?? defaultOrthoScale) * scaleMultiplier;
 
-    const defaultIsoScale = (60 / (Math.max(boundsMap.iso.width, boundsMap.iso.height) || 1));
-    const baseIsoScale = (explicitScale ?? Math.max(0.05, Math.min(10, defaultIsoScale))) * scaleMultiplier;
+    const defaultIsoScale = (75 / (Math.max(boundsMap.iso.width, boundsMap.iso.height) || 1));
+    const baseIsoScale = (explicitScale ?? defaultIsoScale) * scaleMultiplier;
 
     for (const spec of viewSpecs) {
       const custom = config.customPlacements?.[spec.id];

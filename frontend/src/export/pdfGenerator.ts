@@ -242,48 +242,36 @@ export function generateTechnicalDrawingPdf(
   const tby = titleBlockBox.y;
   const tbw = titleBlockBox.width;
   const tbh = titleBlockBox.height;
-  const projSymbolWidth = 32;
+
+  const c0 = tbx;
+  const c1 = tbx + 40;
+  const c2 = tbx + 80;
+  const c3 = tbx + 120;
+  const c4 = tbx + tbw;
 
   // Title block box and dividing lines
-  addRect(tbx, tby, tbw, tbh, 0.6, '#000000', '#ffffff');
-  addLine(tbx, tby + 10, tbx + tbw, tby + 10, 0.35, '#000000');
-  addLine(tbx, tby + 24, tbx + tbw, tby + 24, 0.35, '#000000');
-  addLine(tbx, tby + 33, tbx + tbw, tby + 33, 0.35, '#000000');
+  addRect(tbx, tby, tbw, tbh, 0.7, '#000000', '#ffffff');
+  addLine(c0, tby + 11, c3, tby + 11, 0.35, '#000000');
+  addLine(c0, tby + 25, c4, tby + 25, 0.35, '#000000');
+  addLine(c0, tby + 35.5, c4, tby + 35.5, 0.35, '#000000');
 
-  addLine(tbx + tbw * 0.36, tby + 24, tbx + tbw * 0.36, tby + tbh, 0.3, '#000000');
-  addLine(tbx + tbw * 0.65, tby + 24, tbx + tbw * 0.65, tby + tbh, 0.3, '#000000');
-  addLine(tbx + tbw - projSymbolWidth, tby + 10, tbx + tbw - projSymbolWidth, tby + tbh, 0.3, '#000000');
+  addLine(c1, tby + 25, c1, tby + tbh, 0.35, '#000000');
+  addLine(c2, tby + 25, c2, tby + tbh, 0.35, '#000000');
+  addLine(c3, tby, c3, tby + tbh, 0.35, '#000000');
 
-  // Title Block Text
-  addText('ORGANIZATION / COMPANY', tbx + 4, tby + 3.5, 2.0, true, '#64748b');
-  addText(tb.company || 'DrawViz Technical Studio', tbx + 4, tby + 7.8, 3.4, true, '#111827');
+  // Row 1: Company
+  addText('ORGANIZATION / COMPANY', c0 + 3, tby + 3.8, 1.8, true, '#64748b');
+  addText(tb.company || 'DrawViz Technical Studio', c0 + 3, tby + 8.2, 3.4, true, '#111827');
 
-  addText('DRAWING TITLE', tbx + 4, tby + 13.5, 2.0, true, '#64748b');
-  addText(tb.title || 'TECHNICAL DRAWING', tbx + 4, tby + 19.8, 4.4, true, '#111827');
+  // Row 2: Title
+  addText('DRAWING TITLE', c0 + 3, tby + 14.5, 1.8, true, '#64748b');
+  addText(tb.title || 'TECHNICAL DRAWING', c0 + 3, tby + 20.8, 4.2, true, '#111827');
 
-  addText('DRAWING NO.', tbx + 4, tby + 27, 1.8, true, '#64748b');
-  addText(tb.drawingNumber || 'DWG-001', tbx + 4, tby + 31, 2.8, true, '#111827');
-
-  addText('REVISION', tbx + 4, tby + 36, 1.8, true, '#64748b');
-  addText(tb.revision || 'REV A', tbx + 4, tby + 39.8, 2.6, true, '#111827');
-
-  addText('DRAWN BY', tbx + tbw * 0.36 + 3, tby + 27, 1.8, true, '#64748b');
-  addText(tb.drawnBy || 'ENGINEER', tbx + tbw * 0.36 + 3, tby + 31, 2.6, false, '#111827');
-
-  addText('CHECKED BY', tbx + tbw * 0.36 + 3, tby + 36, 1.8, true, '#64748b');
-  addText(tb.checkedBy || 'APPROVED', tbx + tbw * 0.36 + 3, tby + 39.8, 2.6, false, '#111827');
-
-  addText('SCALE', tbx + tbw * 0.65 + 3, tby + 27, 1.8, true, '#64748b');
-  addText(tb.scaleText || (config.scaleMode === 'auto' ? 'NTS' : config.scaleMode), tbx + tbw * 0.65 + 3, tby + 31, 2.6, true, '#111827');
-
-  addText('DATE / UNITS', tbx + tbw * 0.65 + 3, tby + 36, 1.8, true, '#64748b');
-  addText(`${tb.date || new Date().toISOString().slice(0, 10)} (${tb.units || 'mm'})`, tbx + tbw * 0.65 + 3, tby + 39.8, 2.4, false, '#111827');
-
-  // Projection Method & Symbol
+  // Projection Method Label
   addText(
     config.projection === 'third_angle' ? '3RD ANGLE PROJ.' : '1ST ANGLE PROJ.',
-    tbx + tbw - projSymbolWidth + 2,
-    tby + 13.5,
+    c3 + 3,
+    tby + 4.5,
     1.8,
     true,
     '#64748b'
@@ -291,10 +279,10 @@ export function generateTechnicalDrawingPdf(
 
   // Projection Cone Symbol
   if (config.showProjectionSymbol) {
-    const scx = tbx + tbw - projSymbolWidth / 2;
-    const scy = tby + 27;
-    const rBig = 4.0;
-    const rSmall = 2.0;
+    const scx = c3 + (c4 - c3) / 2;
+    const scy = tby + 15.0;
+    const rBig = 3.8;
+    const rSmall = 1.9;
     const coneLen = 8.0;
     const gap = 3.2;
 
@@ -332,6 +320,32 @@ export function generateTechnicalDrawingPdf(
       addLine(coneL - 1, scy, coneR + 2.5, scy, 0.2, '#64748b', [3, 1, 1, 1]);
     }
   }
+
+  // Row 3: DWG NO / DRAWN BY / SCALE / UNITS
+  addText('DRAWING NO.', c0 + 3, tby + 28.5, 1.8, true, '#64748b');
+  addText(tb.drawingNumber || 'DWG-1001', c0 + 3, tby + 32.8, 2.7, true, '#111827');
+
+  addText('DRAWN BY', c1 + 3, tby + 28.5, 1.8, true, '#64748b');
+  addText(tb.drawnBy || 'ENGINEER', c1 + 3, tby + 32.8, 2.7, false, '#111827');
+
+  addText('SCALE', c2 + 3, tby + 28.5, 1.8, true, '#64748b');
+  addText(tb.scaleText || (config.scaleMode === 'auto' ? 'NTS (FIT)' : config.scaleMode), c2 + 3, tby + 32.8, 2.7, true, '#111827');
+
+  addText('UNITS', c3 + 3, tby + 28.5, 1.8, true, '#64748b');
+  addText(tb.units || 'mm', c3 + 3, tby + 32.8, 2.7, false, '#111827');
+
+  // Row 4: REVISION / CHECKED BY / SHEET / DATE
+  addText('REVISION', c0 + 3, tby + 39.0, 1.8, true, '#64748b');
+  addText(tb.revision || 'REV A', c0 + 3, tby + 43.0, 2.7, true, '#111827');
+
+  addText('CHECKED BY', c1 + 3, tby + 39.0, 1.8, true, '#64748b');
+  addText(tb.checkedBy || 'APPROVED', c1 + 3, tby + 43.0, 2.7, false, '#111827');
+
+  addText('SHEET', c2 + 3, tby + 39.0, 1.8, true, '#64748b');
+  addText('1 OF 1', c2 + 3, tby + 43.0, 2.7, true, '#111827');
+
+  addText('DATE', c3 + 3, tby + 39.0, 1.8, true, '#64748b');
+  addText(tb.date || new Date().toISOString().slice(0, 10), c3 + 3, tby + 43.0, 2.7, false, '#111827');
 
   // 5. Views and CAD Geometry
   for (const v of views) {

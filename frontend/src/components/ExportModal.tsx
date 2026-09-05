@@ -68,7 +68,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [projection, setProjection] = useState<ProjectionStandard>('third_angle');
   const [layoutMode, setLayoutMode] = useState<ViewLayoutMode>('multi_4view');
   const [singleViewType, setSingleViewType] = useState<SingleViewType>('iso');
-  const [scaleMode, setScaleMode] = useState<'auto' | '1:1' | '1:2' | '2:1' | '1:5' | '5:1'>('auto');
+  const [scaleMode, setScaleMode] = useState<'auto' | '1:10' | '1:5' | '1:2' | '1:1' | '2:1' | '5:1' | '10:1'>('auto');
   const [overallScaleMultiplier, setOverallScaleMultiplier] = useState<number>(1.0);
   const [shadingStyle, setShadingStyle] = useState<ShadingStyle>('shaded');
   const [showHiddenLines, setShowHiddenLines] = useState<boolean>(true);
@@ -537,17 +537,111 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   </div>
                 </div>
 
-                {/* View Scale Slider */}
+                {/* View Scale Factor Control (Unconstrained Up / Down Sizing) */}
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, fontWeight: 600, color: isDark ? '#94a3b8' : '#64748b', marginBottom: 2 }}>
-                    <span>View Scale Factor:</span>
-                    <span>{selectedView.scale.toFixed(2)}x</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: isDark ? '#94a3b8' : '#64748b' }}>
+                      View Scale:
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <button
+                        onClick={() => {
+                          const nextScale = Math.max(0.05, Math.round((selectedView.scale - 0.1) * 100) / 100);
+                          setCustomPlacements((prev) => ({
+                            ...prev,
+                            [selectedView.id]: {
+                              ...prev[selectedView.id],
+                              scale: nextScale,
+                            },
+                          }));
+                        }}
+                        style={{
+                          width: 20,
+                          height: 20,
+                          borderRadius: 3,
+                          border: isDark ? '1px solid #475569' : '1px solid #cbd5e1',
+                          backgroundColor: isDark ? '#1e293b' : '#f1f5f9',
+                          color: isDark ? '#f1f5f9' : '#0f172a',
+                          fontSize: 12,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                        title="Scale down view (-0.1x)"
+                      >
+                        -
+                      </button>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="0.01"
+                        max="20"
+                        value={Math.round(selectedView.scale * 100) / 100}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          if (!isNaN(val) && val > 0) {
+                            setCustomPlacements((prev) => ({
+                              ...prev,
+                              [selectedView.id]: {
+                                ...prev[selectedView.id],
+                                scale: val,
+                              },
+                            }));
+                          }
+                        }}
+                        style={{
+                          width: 50,
+                          textAlign: 'center',
+                          padding: '2px 4px',
+                          borderRadius: 3,
+                          border: isDark ? '1px solid #475569' : '1px solid #cbd5e1',
+                          backgroundColor: isDark ? '#0f172a' : '#ffffff',
+                          color: isDark ? '#f8fafc' : '#0f172a',
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      />
+                      <span style={{ fontSize: 11, fontWeight: 700, color: '#0284c7' }}>x</span>
+                      <button
+                        onClick={() => {
+                          const nextScale = Math.round((selectedView.scale + 0.1) * 100) / 100;
+                          setCustomPlacements((prev) => ({
+                            ...prev,
+                            [selectedView.id]: {
+                              ...prev[selectedView.id],
+                              scale: nextScale,
+                            },
+                          }));
+                        }}
+                        style={{
+                          width: 20,
+                          height: 20,
+                          borderRadius: 3,
+                          border: isDark ? '1px solid #475569' : '1px solid #cbd5e1',
+                          backgroundColor: isDark ? '#1e293b' : '#f1f5f9',
+                          color: isDark ? '#f1f5f9' : '#0f172a',
+                          fontSize: 12,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                        }}
+                        title="Scale up view (+0.1x)"
+                      >
+                        +
+                      </button>
+                    </div>
                   </div>
                   <input
                     type="range"
-                    min="0.2"
-                    max="3.0"
-                    step="0.05"
+                    min="0.05"
+                    max="5.0"
+                    step="0.01"
                     value={selectedView.scale}
                     onChange={(e) => {
                       const s = parseFloat(e.target.value);
@@ -561,6 +655,39 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     }}
                     style={{ width: '100%', accentColor: '#0284c7' }}
                   />
+                  {/* Quick Scale Presets */}
+                  <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                    {[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0].map((sc) => (
+                      <button
+                        key={sc}
+                        onClick={() => {
+                          setCustomPlacements((prev) => ({
+                            ...prev,
+                            [selectedView.id]: {
+                              ...prev[selectedView.id],
+                              scale: sc,
+                            },
+                          }));
+                        }}
+                        style={{
+                          padding: '2px 5px',
+                          borderRadius: 3,
+                          border: isDark ? '1px solid #334155' : '1px solid #e2e8f0',
+                          backgroundColor: Math.abs(selectedView.scale - sc) < 0.04
+                            ? (isDark ? 'rgba(2, 132, 199, 0.3)' : '#e0f2fe')
+                            : 'transparent',
+                          color: Math.abs(selectedView.scale - sc) < 0.04
+                            ? '#0284c7'
+                            : isDark ? '#94a3b8' : '#64748b',
+                          fontSize: 9,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {sc}x
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -881,21 +1008,126 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </select>
               </div>
 
-              {/* Overall View Scale Slider */}
+              {/* Overall View Scale Slider with Unconstrained Up / Down Sizing */}
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 600, color: isDark ? '#cbd5e1' : '#475569', marginBottom: 2 }}>
-                  <span>Overall Scale:</span>
-                  <span style={{ color: '#0284c7' }}>{Math.round(overallScaleMultiplier * 100)}%</span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: isDark ? '#cbd5e1' : '#475569' }}>
+                    Overall Scale:
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button
+                      onClick={() => setOverallScaleMultiplier((m) => Math.max(0.05, Math.round((m - 0.1) * 100) / 100))}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 3,
+                        border: isDark ? '1px solid #475569' : '1px solid #cbd5e1',
+                        backgroundColor: isDark ? '#1e293b' : '#f1f5f9',
+                        color: isDark ? '#f1f5f9' : '#0f172a',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                      }}
+                      title="Scale down overall drawing (-10%)"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min="5"
+                      max="1000"
+                      step="5"
+                      value={Math.round(overallScaleMultiplier * 100)}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        if (!isNaN(val) && val > 0) {
+                          setOverallScaleMultiplier(val / 100);
+                        }
+                      }}
+                      style={{
+                        width: 48,
+                        textAlign: 'center',
+                        padding: '2px 4px',
+                        borderRadius: 3,
+                        border: isDark ? '1px solid #475569' : '1px solid #cbd5e1',
+                        backgroundColor: isDark ? '#0f172a' : '#ffffff',
+                        color: '#0284c7',
+                        fontSize: 11,
+                        fontWeight: 700,
+                      }}
+                    />
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#0284c7' }}>%</span>
+                    <button
+                      onClick={() => setOverallScaleMultiplier((m) => Math.round((m + 0.1) * 100) / 100)}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 3,
+                        border: isDark ? '1px solid #475569' : '1px solid #cbd5e1',
+                        backgroundColor: isDark ? '#1e293b' : '#f1f5f9',
+                        color: isDark ? '#f1f5f9' : '#0f172a',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                      }}
+                      title="Scale up overall drawing (+10%)"
+                    >
+                      +
+                    </button>
+                  </div>
                 </div>
+
                 <input
                   type="range"
-                  min="0.3"
-                  max="2.0"
-                  step="0.05"
+                  min="0.05"
+                  max="5.0"
+                  step="0.01"
                   value={overallScaleMultiplier}
                   onChange={(e) => setOverallScaleMultiplier(parseFloat(e.target.value))}
                   style={{ width: '100%', accentColor: '#0284c7' }}
                 />
+
+                {/* Quick Overall Scale Presets */}
+                <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                  {[
+                    { label: '25%', val: 0.25 },
+                    { label: '50%', val: 0.5 },
+                    { label: '75%', val: 0.75 },
+                    { label: '100%', val: 1.0 },
+                    { label: '150%', val: 1.5 },
+                    { label: '200%', val: 2.0 },
+                    { label: '300%', val: 3.0 },
+                  ].map((p) => (
+                    <button
+                      key={p.val}
+                      onClick={() => setOverallScaleMultiplier(p.val)}
+                      style={{
+                        padding: '2px 5px',
+                        borderRadius: 3,
+                        border: isDark ? '1px solid #334155' : '1px solid #e2e8f0',
+                        backgroundColor: Math.abs(overallScaleMultiplier - p.val) < 0.04
+                          ? (isDark ? 'rgba(2, 132, 199, 0.3)' : '#e0f2fe')
+                          : 'transparent',
+                        color: Math.abs(overallScaleMultiplier - p.val) < 0.04
+                          ? '#0284c7'
+                          : isDark ? '#94a3b8' : '#64748b',
+                        fontSize: 9,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -917,11 +1149,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     }}
                   >
                     <option value="auto">Auto (Fit to Sheet)</option>
-                    <option value="1:1">1:1 (Full Size)</option>
+                    <option value="1:10">1:10 (10x Reduction)</option>
+                    <option value="1:5">1:5 (5x Reduction)</option>
                     <option value="1:2">1:2 (Half Size)</option>
+                    <option value="1:1">1:1 (Full Size)</option>
                     <option value="2:1">2:1 (Double Size)</option>
-                    <option value="1:5">1:5 (Reduction)</option>
-                    <option value="5:1">5:1 (Enlargement)</option>
+                    <option value="5:1">5:1 (5x Enlargement)</option>
+                    <option value="10:1">10:1 (10x Enlargement)</option>
                   </select>
                 </div>
 
@@ -1374,25 +1608,81 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                           pointerEvents="none"
                         />
 
-                        {/* Drag Handle Badge at top-left of view when hovered or selected */}
+                        {/* Drag Handle Badge & Sizing Controls at top-left of view when hovered or selected */}
                         {(isSel || isHov) && (
                           <g transform={`translate(${b.minX - 2}, ${b.minY - 7})`}>
+                            {/* Background badge pill */}
                             <rect
-                              width={Math.min(bw + 4, 38)}
-                              height={5}
+                              width={Math.min(Math.max(bw + 4, 50), 54)}
+                              height={5.2}
                               rx={1.2}
                               fill={isSel ? '#0284c7' : '#0369a1'}
+                              pointerEvents="none"
                             />
+                            {/* Move label */}
                             <text
-                              x={3}
-                              y={3.5}
-                              fontSize={2.5}
+                              x={2.5}
+                              y={3.6}
+                              fontSize={2.3}
                               fontWeight="700"
                               fill="#ffffff"
                               pointerEvents="none"
                             >
                               ✥ MOVE
                             </text>
+
+                            {/* [-] Scale Down Button */}
+                            <g
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const nextScale = Math.max(0.05, Math.round((v.scale - 0.1) * 100) / 100);
+                                setCustomPlacements((prev) => ({
+                                  ...prev,
+                                  [v.id]: {
+                                    ...prev[v.id],
+                                    scale: nextScale,
+                                  },
+                                }));
+                              }}
+                              style={{ cursor: 'pointer' }}
+                              pointerEvents="all"
+                            >
+                              <rect x={19.5} y={0.8} width={5.5} height={3.6} rx={0.8} fill="rgba(255,255,255,0.25)" />
+                              <text x={22.25} y={3.5} fontSize={3.2} fontWeight="900" fill="#ffffff" textAnchor="middle">-</text>
+                            </g>
+
+                            {/* View Scale Factor text */}
+                            <text
+                              x={31}
+                              y={3.6}
+                              fontSize={2.1}
+                              fontWeight="700"
+                              fill="#ffffff"
+                              textAnchor="middle"
+                              pointerEvents="none"
+                            >
+                              {v.scale.toFixed(1)}x
+                            </text>
+
+                            {/* [+] Scale Up Button */}
+                            <g
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const nextScale = Math.round((v.scale + 0.1) * 100) / 100;
+                                setCustomPlacements((prev) => ({
+                                  ...prev,
+                                  [v.id]: {
+                                    ...prev[v.id],
+                                    scale: nextScale,
+                                  },
+                                }));
+                              }}
+                              style={{ cursor: 'pointer' }}
+                              pointerEvents="all"
+                            >
+                              <rect x={36.5} y={0.8} width={5.5} height={3.6} rx={0.8} fill="rgba(255,255,255,0.25)" />
+                              <text x={39.25} y={3.5} fontSize={3.2} fontWeight="900" fill="#ffffff" textAnchor="middle">+</text>
+                            </g>
                           </g>
                         )}
                       </g>
