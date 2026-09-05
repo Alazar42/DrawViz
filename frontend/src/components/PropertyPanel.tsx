@@ -32,7 +32,23 @@ import {
   Check,
   X,
   Target,
+  Palette,
 } from 'lucide-react';
+
+const PLANE_COLOR_PALETTES = [
+  { name: 'Blueprint Cyan', hex: '#0284c7' },
+  { name: 'Emerald Green', hex: '#059669' },
+  { name: 'Amber Gold', hex: '#d97706' },
+  { name: 'Brick Red', hex: '#dc2626' },
+  { name: 'Royal Indigo', hex: '#4f46e5' },
+  { name: 'Violet Purple', hex: '#7c3aed' },
+  { name: 'Rose Coral', hex: '#e11d48' },
+  { name: 'Teal Turquoise', hex: '#0d9488' },
+  { name: 'Pure White', hex: '#f8fafc' },
+  { name: 'Steel Slate', hex: '#475569' },
+  { name: 'Dark Carbon', hex: '#1e293b' },
+  { name: 'Concrete Grey', hex: '#94a3b8' },
+];
 
 interface PropertyPanelProps {
   selectedLine: DrawingLine | null;
@@ -77,6 +93,8 @@ interface PropertyPanelProps {
   onUpdateSphere?: (sphere: DrawingSphere) => void;
   onUpdateLineStyle: (id: string, style: Partial<DrawingLine['style']>) => void;
   onSketchOnFace?: (face: Face3D) => void;
+  faceColors?: Record<string, string>;
+  onUpdatePlaneColor?: (color: string) => void;
 }
 
 export const PropertyPanel: React.FC<PropertyPanelProps> = ({
@@ -122,6 +140,8 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   onUpdateSphere,
   onUpdateLineStyle,
   onSketchOnFace,
+  faceColors = {},
+  onUpdatePlaneColor,
 }) => {
   const isDark = theme === 'dark';
   const [inspectorTab, setInspectorTab] = useState<'properties' | 'groups'>('properties');
@@ -129,6 +149,95 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   const [customGroupName, setCustomGroupName] = useState('');
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+
+  const activePlaneColor =
+    (selectedFace && (faceColors[selectedFace.id] || selectedFace.color)) ||
+    (selectedFaces.length > 0 && (faceColors[selectedFaces[0].id] || selectedFaces[0].color)) ||
+    (selectedGroupId && groups.find((g) => g.id === selectedGroupId)?.color) ||
+    undefined;
+
+  const renderPlaneColorPicker = (activeColor?: string, title: string = 'Plane Color') => (
+    <div
+      style={{
+        marginTop: 6,
+        padding: '8px 10px',
+        backgroundColor: isDark ? '#1a1e27' : '#f8fafc',
+        border: isDark ? '1px solid #2d3748' : '1px solid #e2e8f0',
+        borderRadius: 6,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 7,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Palette size={13} style={{ color: '#6366f1' }} />
+          <span style={{ fontWeight: 600, color: isDark ? '#e2e8f0' : '#334155', fontSize: 11 }}>
+            {title}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontFamily: 'monospace', fontSize: 10, fontWeight: 600, color: activeColor || (isDark ? '#94a3b8' : '#64748b') }}>
+            {activeColor ? activeColor.toUpperCase() : 'DEFAULT'}
+          </span>
+          <label
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: 4,
+              backgroundColor: activeColor || (isDark ? '#334155' : '#cbd5e1'),
+              border: isDark ? '2px solid #64748b' : '2px solid #94a3b8',
+              cursor: 'pointer',
+              display: 'inline-block',
+              position: 'relative',
+              overflow: 'hidden',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+            }}
+            title="Click to choose custom color"
+          >
+            <input
+              type="color"
+              value={activeColor || '#6366f1'}
+              onChange={(e) => onUpdatePlaneColor?.(e.target.value)}
+              style={{
+                position: 'absolute',
+                top: -10,
+                left: -10,
+                width: 40,
+                height: 40,
+                opacity: 0,
+                cursor: 'pointer',
+              }}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 4 }}>
+        {PLANE_COLOR_PALETTES.map((c) => {
+          const isSelectedColor = activeColor?.toLowerCase() === c.hex.toLowerCase();
+          return (
+            <button
+              key={c.hex}
+              onClick={() => onUpdatePlaneColor?.(c.hex)}
+              style={{
+                height: 18,
+                borderRadius: 3,
+                backgroundColor: c.hex,
+                border: isSelectedColor
+                  ? '2px solid #ffffff'
+                  : isDark ? '1px solid rgba(255,255,255,0.15)' : '1px solid rgba(0,0,0,0.1)',
+                outline: isSelectedColor ? '2px solid #6366f1' : 'none',
+                cursor: 'pointer',
+                padding: 0,
+              }}
+              title={c.name}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
 
   const multiCount =
     (selectedLineIds?.length || 0) +
@@ -841,6 +950,7 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
                     <span>Ungroup</span>
                   </button>
                 </div>
+                {activeGroup.type === 'plane' && renderPlaneColorPicker(activeGroup.color, 'Group Plane Color')}
               </div>
             );
           })()}
@@ -917,6 +1027,8 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
                   Manage Groups
                 </button>
               </div>
+              {(selectionCategory === 'plane' || selectedFaces.length > 0) &&
+                renderPlaneColorPicker(activePlaneColor, `Planes Color (${selectedFaces.length || multiCount})`)}
             </div>
           )}
 
@@ -1544,6 +1656,8 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
             <Sparkles size={13} />
             <span>Sketch on this Face</span>
           </button>
+
+          {renderPlaneColorPicker(activePlaneColor, 'Plane Color')}
 
           {renderGroupWidget(selectedFace.groupId, 'plane', [selectedFace.id], 'Plane Group')}
         </div>

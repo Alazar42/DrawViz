@@ -15,6 +15,7 @@ export interface LineStyle {
   stroke?: string;
   strokeWidth?: number;
   lineType?: LineType;
+  faceColor?: string;
 }
 
 export interface DrawingLine {
@@ -73,6 +74,7 @@ export interface EntityGroup {
   name: string;
   type: GroupType;
   memberIds: string[];
+  color?: string;
 }
 
 export interface Layer {
@@ -142,6 +144,7 @@ export interface Face3D {
   plane: IsoplanePlane;
   elevation: number;
   groupId?: string;
+  color?: string;
 }
 
 export interface LessonObjective {

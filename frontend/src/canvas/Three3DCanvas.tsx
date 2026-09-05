@@ -70,6 +70,7 @@ interface Three3DCanvasProps {
   selectedSphereId?: string | null;
   selectedVertex?: Point3D | null;
   selectedFace?: Face3D | null;
+  faceColors?: Record<string, string>;
   selectionMode?: SelectionMode;
   activeTool: ToolType;
   onSelectTool?: (tool: ToolType) => void;
@@ -240,6 +241,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
   groups = [],
   selectedGroupId = null,
   onSelectGroup,
+  faceColors = {},
   isPerspective: propIsPerspective,
   onTogglePerspective,
 }) => {
@@ -2252,7 +2254,22 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
       }
       faceGeo.computeVertexNormals();
 
-      const faceMesh = new THREE.Mesh(faceGeo, baseFaceMat);
+      const faceColor =
+        faceColors[faceObj.id] ||
+        faceObj.color ||
+        (faceObj.groupId ? groups.find((g) => g.id === faceObj.groupId)?.color : undefined) ||
+        (targetGroup && targetGroup.id === faceObj.groupId ? targetGroup.color : undefined);
+
+      const faceMat = faceColor
+        ? new THREE.MeshLambertMaterial({
+            color: new THREE.Color(faceColor),
+            transparent: true,
+            opacity: solidShading ? 0.92 : 0.72,
+            side: THREE.DoubleSide,
+          })
+        : baseFaceMat;
+
+      const faceMesh = new THREE.Mesh(faceGeo, faceMat);
       (faceMesh as any).userData = { faceData: faceObj };
       targetFaceGroup.add(faceMesh);
 
@@ -2260,7 +2277,7 @@ export const Three3DCanvas: React.FC<Three3DCanvasProps> = memo(({
         const selMat = new THREE.MeshBasicMaterial({
           color: 0x6366f1,
           transparent: true,
-          opacity: 0.38,
+          opacity: 0.35,
           side: THREE.DoubleSide,
           depthTest: false,
         });

@@ -67,6 +67,7 @@ interface HistorySnapshot {
   cylinders: DrawingCylinder[];
   spheres: DrawingSphere[];
   groups: EntityGroup[];
+  faceColors?: Record<string, string>;
 }
 
 const DEFAULT_LAYERS: Layer[] = [
@@ -170,6 +171,10 @@ export function useDrawingState() {
   const selectedFaceRef = useRef(selectedFace);
   selectedFaceRef.current = selectedFace;
 
+  const [faceColors, setFaceColors] = useState<Record<string, string>>({});
+  const faceColorsRef = useRef(faceColors);
+  faceColorsRef.current = faceColors;
+
   const [theme, setTheme] = useState<AppTheme>(() => {
     try {
       const saved = localStorage.getItem('drawviz_theme');
@@ -240,7 +245,8 @@ export function useDrawingState() {
       currentArcs: DrawingArc[] = arcs,
       currentCylinders: DrawingCylinder[] = cylinders,
       currentSpheres: DrawingSphere[] = spheres,
-      currentGroups: EntityGroup[] = groups
+      currentGroups: EntityGroup[] = groups,
+      currentFaceColors: Record<string, string> = faceColorsRef.current
     ) => {
       setUndoStack((prev) => [
         ...prev.slice(-30),
@@ -250,6 +256,7 @@ export function useDrawingState() {
           cylinders: currentCylinders,
           spheres: currentSpheres,
           groups: currentGroups,
+          faceColors: { ...currentFaceColors },
         },
       ]);
       setRedoStack([]);
@@ -2138,13 +2145,14 @@ export function useDrawingState() {
     setUndoStack((prev) => prev.slice(0, -1));
     setRedoStack((prev) => [
       ...prev,
-      { lines, arcs, cylinders, spheres, groups },
+      { lines, arcs, cylinders, spheres, groups, faceColors: { ...faceColorsRef.current } },
     ]);
     setLinesState(previous.lines);
     setArcsState(previous.arcs);
     setCylindersState(previous.cylinders || []);
     setSpheresState(previous.spheres || []);
     setGroupsState(previous.groups || []);
+    setFaceColors(previous.faceColors || {});
     setSelectedLineId(null);
     setSelectedArcId(null);
     setSelectedCylinderId(null);
@@ -2166,13 +2174,14 @@ export function useDrawingState() {
     setRedoStack((prev) => prev.slice(0, -1));
     setUndoStack((prev) => [
       ...prev,
-      { lines, arcs, cylinders, spheres, groups },
+      { lines, arcs, cylinders, spheres, groups, faceColors: { ...faceColorsRef.current } },
     ]);
     setLinesState(next.lines);
     setArcsState(next.arcs);
     setCylindersState(next.cylinders || []);
     setSpheresState(next.spheres || []);
     setGroupsState(next.groups || []);
+    setFaceColors(next.faceColors || {});
     setSelectedLineId(null);
     setSelectedArcId(null);
     setSelectedCylinderId(null);
@@ -2197,12 +2206,13 @@ export function useDrawingState() {
   }, []);
 
   const resetCanvas = useCallback(() => {
-    pushToHistory(lines, arcs, cylinders, spheres, groups);
+    pushToHistory(lines, arcs, cylinders, spheres, groups, faceColorsRef.current);
     setLinesState([]);
     setArcsState([]);
     setCylindersState([]);
     setSpheresState([]);
     setGroupsState([]);
+    setFaceColors({});
     setSelectedLineId(null);
     setSelectedArcId(null);
     setSelectedCylinderId(null);
@@ -2218,6 +2228,76 @@ export function useDrawingState() {
     setSelectionCategory(null);
     setActiveAnchor(null);
   }, [lines, arcs, cylinders, spheres, groups, pushToHistory]);
+
+  const updateSelectedPlaneColor = useCallback(
+    (color: string) => {
+      pushToHistory(
+        linesRef.current,
+        arcsRef.current,
+        cylindersRef.current,
+        spheresRef.current,
+        groupsRef.current,
+        faceColorsRef.current
+      );
+
+      const targetFaceIds: string[] = [];
+      const targetFaceVerts: Point3D[] = [];
+
+      if (selectedFace) {
+        targetFaceIds.push(selectedFace.id);
+        targetFaceVerts.push(...selectedFace.vertices);
+      }
+      if (selectedFaces.length > 0) {
+        selectedFaces.forEach((f) => {
+          targetFaceIds.push(f.id);
+          targetFaceVerts.push(...f.vertices);
+        });
+      }
+
+      // If active group is a plane group, also color the group and all member planes
+      if (selectedGroupId) {
+        const grp = groupsRef.current.find((g) => g.id === selectedGroupId);
+        if (grp?.type === 'plane') {
+          targetFaceIds.push(...grp.memberIds.filter((mid) => mid.startsWith('face-')));
+          setGroupsState((prev) =>
+            prev.map((g) => (g.id === selectedGroupId ? { ...g, color } : g))
+          );
+        }
+      }
+
+      // Update faceColors dictionary
+      setFaceColors((prev) => {
+        const next = { ...prev };
+        targetFaceIds.forEach((fid) => {
+          next[fid] = color;
+        });
+        return next;
+      });
+
+      // Update selected face states
+      setSelectedFace((prev) => (prev ? { ...prev, color } : null));
+      setSelectedFaces((prev) => prev.map((f) => ({ ...f, color })));
+
+      // Tag member lines with faceColor so color persists through transforms & JSON exports
+      if (targetFaceVerts.length > 0) {
+        setLinesState((prev) =>
+          prev.map((l) => {
+            if (matchesAnyPoint(l.start, targetFaceVerts) && matchesAnyPoint(l.end, targetFaceVerts)) {
+              return {
+                ...l,
+                style: {
+                  ...l.style,
+                  faceColor: color,
+                },
+              };
+            }
+            return l;
+          })
+        );
+      }
+    },
+    [selectedFace, selectedFaces, selectedGroupId, pushToHistory]
+  );
 
   const addLayer = useCallback(() => {
     const newId = `layer-${layers.length + 1}`;
@@ -2378,5 +2458,8 @@ export function useDrawingState() {
     theme,
     toggleTheme,
     setTheme: setAppTheme,
+    faceColors,
+    setFaceColors,
+    updateSelectedPlaneColor,
   };
 }

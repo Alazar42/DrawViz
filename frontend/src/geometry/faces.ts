@@ -39,8 +39,9 @@ export function extractFacesFromLines(lines: DrawingLine[], arcs?: DrawingArc[])
   }
 
   const adj = new Map<string, { pt: Point3D; neighbors: Map<string, Point3D> }>();
+  const edgeMeta = new Map<string, { color?: string; groupId?: string }>();
 
-  function addEdge(p1: Point3D, p2: Point3D) {
+  function addEdge(p1: Point3D, p2: Point3D, color?: string, groupId?: string) {
     const k1 = ptKey(p1);
     const k2 = ptKey(p2);
     if (k1 === k2) return;
@@ -50,12 +51,17 @@ export function extractFacesFromLines(lines: DrawingLine[], arcs?: DrawingArc[])
 
     adj.get(k1)!.neighbors.set(k2, p2);
     adj.get(k2)!.neighbors.set(k1, p1);
+
+    const edgeKey = k1 < k2 ? `${k1}---${k2}` : `${k2}---${k1}`;
+    if (color || groupId) {
+      edgeMeta.set(edgeKey, { color, groupId });
+    }
   }
 
   // 1. Add all wireframe lines
   if (lines) {
     for (const line of lines) {
-      addEdge(line.start, line.end);
+      addEdge(line.start, line.end, line.style?.faceColor, line.groupId);
     }
   }
 
@@ -232,6 +238,17 @@ export function extractFacesFromLines(lines: DrawingLine[], arcs?: DrawingArc[])
                 elev = Math.round(cycleVertices.reduce((s, p) => s + p.x, 0) / cycleVertices.length);
               }
 
+              let faceColor: string | undefined = undefined;
+              let faceGroupId: string | undefined = undefined;
+              for (let i = 0; i < fullCycleKeys.length; i++) {
+                const kA = fullCycleKeys[i];
+                const kB = fullCycleKeys[(i + 1) % fullCycleKeys.length];
+                const ek = kA < kB ? `${kA}---${kB}` : `${kB}---${kA}`;
+                const meta = edgeMeta.get(ek);
+                if (meta?.color && !faceColor) faceColor = meta.color;
+                if (meta?.groupId && !faceGroupId) faceGroupId = meta.groupId;
+              }
+
               facesList.push({
                 id: `face-${sortedKeys}`,
                 normal: { x: Number(nx.toFixed(4)), y: Number(nz.toFixed(4)), z: Number(ny.toFixed(4)) },
@@ -243,6 +260,8 @@ export function extractFacesFromLines(lines: DrawingLine[], arcs?: DrawingArc[])
                 vertices: cycleVertices,
                 plane: facePlane,
                 elevation: elev,
+                groupId: faceGroupId,
+                color: faceColor,
               });
             }
           }

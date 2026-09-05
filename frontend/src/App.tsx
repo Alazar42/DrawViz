@@ -781,6 +781,7 @@ export const App: React.FC = () => {
               }}
               isPerspective={state.isPerspective}
               onTogglePerspective={state.togglePerspective}
+              faceColors={state.faceColors}
             />
           </div>
 
@@ -903,6 +904,11 @@ export const App: React.FC = () => {
               state.setActiveElevation(face.elevation);
               state.setActiveTool('line');
               setStatusMessage(`Drafting Grid aligned to Face [${face.plane.toUpperCase()}] Elev ${face.elevation}`);
+            }}
+            faceColors={state.faceColors}
+            onUpdatePlaneColor={(color) => {
+              state.updateSelectedPlaneColor(color);
+              setStatusMessage(`Changed plane color to ${color}`);
             }}
           />
 
