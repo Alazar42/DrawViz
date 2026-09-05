@@ -487,8 +487,6 @@ export const App: React.FC = () => {
     >
       {/* 1. Top Bar */}
       <TopBar
-        appMode={state.appMode}
-        onSetAppMode={state.setAppMode}
         canUndo={state.canUndo}
         canRedo={state.canRedo}
         onUndo={state.undo}

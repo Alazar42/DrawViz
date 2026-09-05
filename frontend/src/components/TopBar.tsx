@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppMode, AppTheme } from '../types/drawing';
+import { AppTheme } from '../types/drawing';
 import {
   Undo2,
   Redo2,
@@ -7,15 +7,12 @@ import {
   FolderOpen,
   FilePlus,
   Settings,
-  ChevronDown,
   Download,
   Sun,
   Moon,
 } from 'lucide-react';
 
 interface TopBarProps {
-  appMode: AppMode;
-  onSetAppMode: (mode: AppMode) => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -31,8 +28,6 @@ interface TopBarProps {
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
-  appMode,
-  onSetAppMode,
   canUndo,
   canRedo,
   onUndo,
@@ -89,50 +84,6 @@ export const TopBar: React.FC<TopBarProps> = ({
         </span>
       </div>
 
-      {/* Center: Mode Dropdown */}
-      <div style={{ position: 'relative' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '4px 10px',
-            borderRadius: 4,
-            border: isDark ? '1px solid #334155' : '1px solid #e5e7eb',
-            backgroundColor: isDark ? '#282c34' : '#f9fafb',
-            cursor: 'pointer',
-            fontSize: 12,
-            fontWeight: 500,
-            color: isDark ? '#f1f5f9' : '#1f2937',
-          }}
-        >
-          <select
-            value={appMode}
-            onChange={(e) => onSetAppMode(e.target.value as AppMode)}
-            style={{
-              background: 'none',
-              border: 'none',
-              outline: 'none',
-              fontSize: 12,
-              fontWeight: 500,
-              color: isDark ? '#f1f5f9' : '#1f2937',
-              cursor: 'pointer',
-              paddingRight: 4,
-            }}
-          >
-            <option value="practice" style={{ backgroundColor: isDark ? '#1e2026' : '#ffffff', color: isDark ? '#f1f5f9' : '#1f2937' }}>
-              Practice Mode
-            </option>
-            <option value="lessons" style={{ backgroundColor: isDark ? '#1e2026' : '#ffffff', color: isDark ? '#f1f5f9' : '#1f2937' }}>
-              Lessons Mode
-            </option>
-            <option value="challenges" style={{ backgroundColor: isDark ? '#1e2026' : '#ffffff', color: isDark ? '#f1f5f9' : '#1f2937' }}>
-              Challenges Mode
-            </option>
-          </select>
-          <ChevronDown size={13} color={isDark ? '#94a3b8' : '#6b7280'} />
-        </div>
-      </div>
 
       {/* Right: Actions */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -203,7 +154,6 @@ export const TopBar: React.FC<TopBarProps> = ({
           }}
         >
           <Download size={14} />
-          <span style={{ fontSize: 11, fontWeight: 600 }}>Export</span>
         </button>
 
         <div style={{ width: 1, height: 16, backgroundColor: isDark ? '#334155' : '#e5e7eb', margin: '0 4px' }} />

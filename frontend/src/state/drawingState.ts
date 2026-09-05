@@ -20,7 +20,7 @@ import {
 import { ViewportTransform, IsoplaneType } from '../geometry/isometric';
 import { HostPlaneInfo } from '../geometry/snapping';
 import { extractFacesFromLines } from '../geometry/faces';
-import { CURRICULUM, STEPPED_INCLINE_TARGET_LINES } from '../lessons/curriculum';
+import { CURRICULUM } from '../lessons/curriculum';
 
 // Accurate logical-to-Three.js spatial rotation:
 // X_three = X_logical, Y_three = Z_logical (Up), Z_three = Y_logical (Depth)
@@ -83,18 +83,32 @@ const DEFAULT_GRID_SETTINGS: GridSettings = {
   gridType: 'isometric',
 };
 
-// Initial state with preloaded isometric stepped block (as in user screenshot)
-const INITIAL_DEMO_LINES: DrawingLine[] = STEPPED_INCLINE_TARGET_LINES.map((l) => ({
-  ...l,
-  layerId: 'layer-1',
-}));
+const STORAGE_KEY = 'drawviz_cache';
+
+function loadFromCache(): { lines: DrawingLine[]; arcs: DrawingArc[]; cylinders: DrawingCylinder[]; spheres: DrawingSphere[]; groups: EntityGroup[]; faceColors: Record<string, string> } | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && Array.isArray(data.lines)) return data;
+    }
+  } catch {}
+  return null;
+}
+
+function saveToCache(data: { lines: DrawingLine[]; arcs: DrawingArc[]; cylinders: DrawingCylinder[]; spheres: DrawingSphere[]; groups: EntityGroup[]; faceColors: Record<string, string> }) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {}
+}
 
 export function useDrawingState() {
-  const [lines, setLinesState] = useState<DrawingLine[]>(INITIAL_DEMO_LINES);
-  const [arcs, setArcsState] = useState<DrawingArc[]>([]);
-  const [cylinders, setCylindersState] = useState<DrawingCylinder[]>([]);
-  const [spheres, setSpheresState] = useState<DrawingSphere[]>([]);
-  const [groups, setGroupsState] = useState<EntityGroup[]>([]);
+  const cached = useRef(loadFromCache());
+  const [lines, setLinesState] = useState<DrawingLine[]>(cached.current?.lines ?? []);
+  const [arcs, setArcsState] = useState<DrawingArc[]>(cached.current?.arcs ?? []);
+  const [cylinders, setCylindersState] = useState<DrawingCylinder[]>(cached.current?.cylinders ?? []);
+  const [spheres, setSpheresState] = useState<DrawingSphere[]>(cached.current?.spheres ?? []);
+  const [groups, setGroupsState] = useState<EntityGroup[]>(cached.current?.groups ?? []);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [groupMode, setGroupMode] = useState<boolean>(true); // Transform group as one unit when grouped
 
@@ -171,9 +185,14 @@ export function useDrawingState() {
   const selectedFaceRef = useRef(selectedFace);
   selectedFaceRef.current = selectedFace;
 
-  const [faceColors, setFaceColors] = useState<Record<string, string>>({});
+  const [faceColors, setFaceColors] = useState<Record<string, string>>(cached.current?.faceColors ?? {});
   const faceColorsRef = useRef(faceColors);
   faceColorsRef.current = faceColors;
+
+  // Auto-save to localStorage whenever drawing data changes
+  useEffect(() => {
+    saveToCache({ lines, arcs, cylinders, spheres, groups, faceColors });
+  }, [lines, arcs, cylinders, spheres, groups, faceColors]);
 
   const [theme, setTheme] = useState<AppTheme>(() => {
     try {
@@ -2227,6 +2246,7 @@ export function useDrawingState() {
     setSelectedFaces([]);
     setSelectionCategory(null);
     setActiveAnchor(null);
+    try { localStorage.removeItem(STORAGE_KEY); } catch {}
   }, [lines, arcs, cylinders, spheres, groups, pushToHistory]);
 
   const updateSelectedPlaneColor = useCallback(
