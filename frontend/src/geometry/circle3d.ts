@@ -77,10 +77,10 @@ export function getArcPoints(
  * Generates technical wireframe elements and solid transform for a 3D cylinder.
  */
 export function getCylinderGeometryData(
-  center: THREE.Vector3,
+  center: THREE.Vector3 | Point3D,
   radius: number,
   height: number,
-  normal: THREE.Vector3
+  normal: THREE.Vector3 | Point3D
 ): {
   basePoints: THREE.Vector3[];
   topPoints: THREE.Vector3[];
@@ -88,15 +88,21 @@ export function getCylinderGeometryData(
   midPoint: THREE.Vector3;
   quaternion: THREE.Quaternion;
 } {
-  const n = normal.clone().normalize();
+  const n = (normal && typeof (normal as any).clone === 'function')
+    ? (normal as THREE.Vector3).clone().normalize()
+    : new THREE.Vector3(normal?.x ?? 0, (normal as any)?.z ?? normal?.y ?? 1, (normal as any)?.y ?? normal?.z ?? 0).normalize();
   if (n.lengthSq() < 1e-6) n.set(0, 1, 0);
+
+  const c = (center && typeof (center as any).clone === 'function')
+    ? (center as THREE.Vector3).clone()
+    : new THREE.Vector3(center?.x ?? 0, (center as any)?.z ?? center?.y ?? 0, (center as any)?.y ?? center?.z ?? 0);
 
   const outU = new THREE.Vector3();
   const outV = new THREE.Vector3();
   getCircleOrthonormalBasis(n, outU, outV);
 
-  const topCenter = center.clone().addScaledVector(n, height);
-  const midPoint = center.clone().addScaledVector(n, height * 0.5);
+  const topCenter = c.clone().addScaledVector(n, height);
+  const midPoint = c.clone().addScaledVector(n, height * 0.5);
 
   const segments = 48;
   const basePoints: THREE.Vector3[] = [];
@@ -111,16 +117,16 @@ export function getCylinderGeometryData(
       .addScaledVector(outU, radius * cosT)
       .addScaledVector(outV, radius * sinT);
 
-    basePoints.push(center.clone().add(offset));
+    basePoints.push(c.clone().add(offset));
     topPoints.push(topCenter.clone().add(offset));
   }
 
   // 4 silhouette seam lines connecting base and top at 90° intervals
   const silhouetteLines: [THREE.Vector3, THREE.Vector3][] = [
-    [center.clone().addScaledVector(outU, radius), topCenter.clone().addScaledVector(outU, radius)],
-    [center.clone().addScaledVector(outU, -radius), topCenter.clone().addScaledVector(outU, -radius)],
-    [center.clone().addScaledVector(outV, radius), topCenter.clone().addScaledVector(outV, radius)],
-    [center.clone().addScaledVector(outV, -radius), topCenter.clone().addScaledVector(outV, -radius)],
+    [c.clone().addScaledVector(outU, radius), topCenter.clone().addScaledVector(outU, radius)],
+    [c.clone().addScaledVector(outU, -radius), topCenter.clone().addScaledVector(outU, -radius)],
+    [c.clone().addScaledVector(outV, radius), topCenter.clone().addScaledVector(outV, radius)],
+    [c.clone().addScaledVector(outV, -radius), topCenter.clone().addScaledVector(outV, -radius)],
   ];
 
   // Quaternion to rotate standard cylinder (aligned with Three Y-axis) to normal N

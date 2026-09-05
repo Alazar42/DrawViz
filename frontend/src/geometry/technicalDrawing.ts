@@ -1,6 +1,7 @@
+import * as THREE from 'three';
 import { DrawingLine, DrawingArc, DrawingCylinder, DrawingSphere, Face3D, Point3D } from '../types/drawing';
 import { extractFacesFromLines } from './faces';
-import { getArc3DPoints, getCylinderGeometryData } from './circle3d';
+import { getArc3DPoints, getCylinderGeometryData, logicalToThree, logicalToThreeNormal } from './circle3d';
 import { COS_30, SIN_30 } from './isometric';
 
 export type PaperSize = 'A4_LANDSCAPE' | 'A4_PORTRAIT' | 'A3_LANDSCAPE' | 'LETTER_LANDSCAPE';
@@ -171,37 +172,45 @@ export function computeViewBounds(
 
   // 1. Lines
   for (const l of lines) {
+    if (!l?.start || !l?.end) continue;
     includePt(project3DTo2D(l.start, viewType));
     includePt(project3DTo2D(l.end, viewType));
   }
 
   // 2. Arcs
   for (const a of arcs) {
-    const pts = getArc3DPoints(a, 24);
-    for (const p of pts) {
-      includePt(project3DTo2D({ x: p.x, y: p.z, z: p.y }, viewType));
+    if (!a) continue;
+    try {
+      const pts = getArc3DPoints(a, 24);
+      for (const p of pts) {
+        includePt(project3DTo2D({ x: p.x, y: p.z, z: p.y }, viewType));
+      }
+    } catch (e) {
+      console.warn('Arc bounds calculation error:', e);
     }
   }
 
   // 3. Cylinders
   for (const c of cylinders) {
-    const norm = c.normal || { x: 0, y: 0, z: 1 };
-    const data = getCylinderGeometryData(
-      { x: c.center.x, y: c.center.z || 0, z: c.center.y } as any,
-      c.radius,
-      c.height,
-      { x: norm.x, y: norm.z || 0, z: norm.y } as any
-    );
-    for (const p of data.basePoints) {
-      includePt(project3DTo2D({ x: p.x, y: p.z, z: p.y }, viewType));
-    }
-    for (const p of data.topPoints) {
-      includePt(project3DTo2D({ x: p.x, y: p.z, z: p.y }, viewType));
+    if (!c?.center) continue;
+    try {
+      const cThree = logicalToThree(c.center);
+      const normalThree = c.normal ? logicalToThreeNormal(c.normal) : new THREE.Vector3(0, 1, 0);
+      const data = getCylinderGeometryData(cThree, c.radius, c.height, normalThree);
+      for (const p of data.basePoints) {
+        includePt(project3DTo2D({ x: p.x, y: p.z, z: p.y }, viewType));
+      }
+      for (const p of data.topPoints) {
+        includePt(project3DTo2D({ x: p.x, y: p.z, z: p.y }, viewType));
+      }
+    } catch (e) {
+      console.warn('Cylinder bounds calculation error:', e);
     }
   }
 
   // 4. Spheres
   for (const s of spheres) {
+    if (!s?.center) continue;
     const center2D = project3DTo2D(s.center, viewType);
     includePt({ x: center2D.x - s.radius, y: center2D.y - s.radius });
     includePt({ x: center2D.x + s.radius, y: center2D.y + s.radius });
@@ -261,20 +270,26 @@ export function buildViewGeometry(
 
   // 1. Planar Faces (for Shaded mode)
   if (shadingStyle === 'shaded') {
-    const faces = extractFacesFromLines(lines, arcs);
-    for (const f of faces) {
-      const pts = f.vertices.map(transformPoint);
-      const color = faceColors[f.id] || f.color || '#94a3b8';
-      projPolygons.push({
-        points: pts,
-        color,
-        opacity: 0.88,
-      });
+    try {
+      const faces = extractFacesFromLines(lines, arcs);
+      for (const f of faces) {
+        if (!f?.vertices || f.vertices.length < 3) continue;
+        const pts = f.vertices.map(transformPoint);
+        const color = faceColors[f.id] || f.color || '#94a3b8';
+        projPolygons.push({
+          points: pts,
+          color,
+          opacity: 0.88,
+        });
+      }
+    } catch (e) {
+      console.warn('Face extraction skipped:', e);
     }
   }
 
   // 2. Lines
   for (const l of lines) {
+    if (!l?.start || !l?.end) continue;
     const s = transformPoint(l.start);
     const e = transformPoint(l.end);
     const isHidden = l.style?.lineType === 'dashed';
@@ -290,119 +305,131 @@ export function buildViewGeometry(
 
   // 3. Arcs and Circles
   for (const a of arcs) {
-    const pts = getArc3DPoints(a, 32);
+    if (!a) continue;
+    try {
+      const pts = getArc3DPoints(a, 32);
 
-    for (let i = 0; i < pts.length - 1; i++) {
-      projLines.push({
-        start: transformPoint({ x: pts[i].x, y: pts[i].z, z: pts[i].y }),
-        end: transformPoint({ x: pts[i + 1].x, y: pts[i + 1].z, z: pts[i + 1].y }),
-        type: 'visible',
-        color: a.style?.stroke || '#111827',
-        strokeWidth: 0.6,
-      });
-    }
+      for (let i = 0; i < pts.length - 1; i++) {
+        projLines.push({
+          start: transformPoint({ x: pts[i].x, y: pts[i].z, z: pts[i].y }),
+          end: transformPoint({ x: pts[i + 1].x, y: pts[i + 1].z, z: pts[i + 1].y }),
+          type: 'visible',
+          color: a.style?.stroke || '#111827',
+          strokeWidth: 0.6,
+        });
+      }
 
-    // Add centerline cross for circular arcs if requested
-    if (showCenterlines && !a.startPoint) {
-      const c = transformPoint(a.center);
-      const r = a.radius * scale;
-      const ext = r * 1.25;
-      projLines.push({
-        start: { x: c.x - ext, y: c.y },
-        end: { x: c.x + ext, y: c.y },
-        type: 'center',
-        color: '#64748b',
-        strokeWidth: 0.25,
-      });
-      projLines.push({
-        start: { x: c.x, y: c.y - ext },
-        end: { x: c.x, y: c.y + ext },
-        type: 'center',
-        color: '#64748b',
-        strokeWidth: 0.25,
-      });
+      // Add centerline cross for circular arcs if requested
+      if (showCenterlines && !a.startPoint && a.center) {
+        const c = transformPoint(a.center);
+        const r = a.radius * scale;
+        const ext = r * 1.25;
+        projLines.push({
+          start: { x: c.x - ext, y: c.y },
+          end: { x: c.x + ext, y: c.y },
+          type: 'center',
+          color: '#64748b',
+          strokeWidth: 0.25,
+        });
+        projLines.push({
+          start: { x: c.x, y: c.y - ext },
+          end: { x: c.x, y: c.y + ext },
+          type: 'center',
+          color: '#64748b',
+          strokeWidth: 0.25,
+        });
+      }
+    } catch (e) {
+      console.warn('Failed projecting arc:', e);
     }
   }
 
   // 4. Cylinders
   for (const cyl of cylinders) {
-    const norm = cyl.normal || { x: 0, y: 0, z: 1 };
-    const data = getCylinderGeometryData(
-      { x: cyl.center.x, y: cyl.center.z || 0, z: cyl.center.y } as any,
-      cyl.radius,
-      cyl.height,
-      { x: norm.x, y: norm.z || 0, z: norm.y } as any
-    );
+    if (!cyl?.center) continue;
+    try {
+      const cThree = logicalToThree(cyl.center);
+      const normalThree = cyl.normal ? logicalToThreeNormal(cyl.normal) : new THREE.Vector3(0, 1, 0);
+      const data = getCylinderGeometryData(cThree, cyl.radius, cyl.height, normalThree);
 
-    // Base ring
-    const basePts = data.basePoints.map((p) => transformPoint({ x: p.x, y: p.z, z: p.y }));
-    for (let i = 0; i < basePts.length; i++) {
-      const next = basePts[(i + 1) % basePts.length];
-      projLines.push({ start: basePts[i], end: next, type: 'visible', strokeWidth: 0.5 });
-    }
+      // Base ring
+      const basePts = data.basePoints.map((p) => transformPoint({ x: p.x, y: p.z, z: p.y }));
+      for (let i = 0; i < basePts.length; i++) {
+        const next = basePts[(i + 1) % basePts.length];
+        projLines.push({ start: basePts[i], end: next, type: 'visible', strokeWidth: 0.5 });
+      }
 
-    // Top ring
-    const topPts = data.topPoints.map((p) => transformPoint({ x: p.x, y: p.z, z: p.y }));
-    for (let i = 0; i < topPts.length; i++) {
-      const next = topPts[(i + 1) % topPts.length];
-      projLines.push({ start: topPts[i], end: next, type: 'visible', strokeWidth: 0.5 });
-    }
+      // Top ring
+      const topPts = data.topPoints.map((p) => transformPoint({ x: p.x, y: p.z, z: p.y }));
+      for (let i = 0; i < topPts.length; i++) {
+        const next = topPts[(i + 1) % topPts.length];
+        projLines.push({ start: topPts[i], end: next, type: 'visible', strokeWidth: 0.5 });
+      }
 
-    // Silhouette lines
-    for (const [p1, p2] of data.silhouetteLines) {
-      projLines.push({
-        start: transformPoint({ x: p1.x, y: p1.z, z: p1.y }),
-        end: transformPoint({ x: p2.x, y: p2.z, z: p2.y }),
-        type: 'visible',
-        strokeWidth: 0.5,
-      });
-    }
+      // Silhouette lines
+      for (const [p1, p2] of data.silhouetteLines) {
+        projLines.push({
+          start: transformPoint({ x: p1.x, y: p1.z, z: p1.y }),
+          end: transformPoint({ x: p2.x, y: p2.z, z: p2.y }),
+          type: 'visible',
+          strokeWidth: 0.5,
+        });
+      }
 
-    // Cylinder axis centerline
-    if (showCenterlines) {
-      const topCenter = transformPoint({
-        x: cyl.center.x + norm.x * cyl.height,
-        y: cyl.center.y + norm.y * cyl.height,
-        z: (cyl.center.z || 0) + norm.z * cyl.height,
-      });
-      const baseCenter = transformPoint(cyl.center);
-      projLines.push({
-        start: baseCenter,
-        end: topCenter,
-        type: 'center',
-        color: '#64748b',
-        strokeWidth: 0.25,
-      });
+      // Cylinder axis centerline
+      if (showCenterlines) {
+        const norm = cyl.normal || { x: 0, y: 1, z: 0 };
+        const baseCenter = cyl.center;
+        const topCenter = {
+          x: baseCenter.x + (norm.x || 0) * cyl.height,
+          y: baseCenter.y + (norm.y || 0) * cyl.height,
+          z: (baseCenter.z || 0) + (norm.z || 0) * cyl.height,
+        };
+        projLines.push({
+          start: transformPoint(baseCenter),
+          end: transformPoint(topCenter),
+          type: 'center',
+          color: '#64748b',
+          strokeWidth: 0.25,
+        });
+      }
+    } catch (e) {
+      console.warn('Failed projecting cylinder:', e);
     }
   }
 
   // 5. Spheres
   for (const s of spheres) {
-    const c = transformPoint(s.center);
-    const r = s.radius * scale;
-    projCircles.push({
-      center: c,
-      radius: r,
-      type: 'visible',
-      color: '#111827',
-    });
+    if (!s?.center) continue;
+    try {
+      const c = transformPoint(s.center);
+      const r = s.radius * scale;
+      projCircles.push({
+        center: c,
+        radius: r,
+        type: 'visible',
+        color: '#111827',
+      });
 
-    if (showCenterlines) {
-      const ext = r * 1.2;
-      projLines.push({
-        start: { x: c.x - ext, y: c.y },
-        end: { x: c.x + ext, y: c.y },
-        type: 'center',
-        color: '#64748b',
-        strokeWidth: 0.25,
-      });
-      projLines.push({
-        start: { x: c.x, y: c.y - ext },
-        end: { x: c.x, y: c.y + ext },
-        type: 'center',
-        color: '#64748b',
-        strokeWidth: 0.25,
-      });
+      if (showCenterlines) {
+        const ext = r * 1.2;
+        projLines.push({
+          start: { x: c.x - ext, y: c.y },
+          end: { x: c.x + ext, y: c.y },
+          type: 'center',
+          color: '#64748b',
+          strokeWidth: 0.25,
+        });
+        projLines.push({
+          start: { x: c.x, y: c.y - ext },
+          end: { x: c.x, y: c.y + ext },
+          type: 'center',
+          color: '#64748b',
+          strokeWidth: 0.25,
+        });
+      }
+    } catch (e) {
+      console.warn('Failed projecting sphere:', e);
     }
   }
 
