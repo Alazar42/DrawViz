@@ -249,7 +249,7 @@ export const App: React.FC = () => {
     state.setViewport({ zoom: 1.0 });
   };
 
-  // File Operations (Wails Native + Web Fallback)
+  // File Operations (Browser-based)
   const handleSaveProject = async () => {
     const project: DrawVizProject = {
       version: '1.0.0',
@@ -277,21 +277,6 @@ export const App: React.FC = () => {
       activeLessonId: state.activeLessonId,
     };
 
-    const wailsGo = (window as any).go?.main?.App;
-    if (wailsGo && wailsGo.SaveFileDialog && wailsGo.SaveProject) {
-      try {
-        const filePath = await wailsGo.SaveFileDialog('drawing.drawviz');
-        if (filePath) {
-          await wailsGo.SaveProject(filePath, project);
-          setStatusMessage(`Saved to ${filePath}`);
-          return;
-        }
-      } catch (err) {
-        console.error('Save error via Wails:', err);
-      }
-    }
-
-    // Fallback: browser download
     const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -328,21 +313,6 @@ export const App: React.FC = () => {
       }
     };
 
-    const wailsGo = (window as any).go?.main?.App;
-    if (wailsGo && wailsGo.OpenFileDialog && wailsGo.LoadProject) {
-      try {
-        const filePath = await wailsGo.OpenFileDialog();
-        if (filePath) {
-          const project: DrawVizProject = await wailsGo.LoadProject(filePath);
-          applyProjectData(project, filePath);
-          return;
-        }
-      } catch (err) {
-        console.error('Open error via Wails:', err);
-      }
-    }
-
-    // Fallback: browser file picker
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.drawviz,.json';
